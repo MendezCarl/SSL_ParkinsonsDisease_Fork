@@ -17,7 +17,8 @@ RUN pip install --no-cache-dir \
     uvicorn[standard] \
     python-multipart \
     mediapipe \
-    opencv-python-headless
+    opencv-python-headless \
+    h5py
 
 COPY . .
 
