@@ -23,11 +23,36 @@ print(f"[DTW] DTW_BASE       = {DTW_BASE}")
 # ================== NORMALIZATION / GUARDS ==================
 ALLOWED_TESTS = {"stand-and-sit", "finger-tapping", "fist-open-close"}
 
+_TEST_NORMALIZATION_ALIASES = {
+    "stand-and-sit": "stand-and-sit",
+    "stand-sit": "stand-and-sit",
+    "stand_to_sit": "stand-and-sit",
+    "stand-and-sit-assessment": "stand-and-sit",
+    "stand-and-sit-test": "stand-and-sit",
+    "stand-&-sit": "stand-and-sit",
+    "stand-&-sit-assessment": "stand-and-sit",
+    "stand-and-sit-evaluation": "stand-and-sit",
+    "finger-tapping": "finger-tapping",
+    "finger_tapping": "finger-tapping",
+    "finger-taping": "finger-tapping",
+    "finger-tapping-test": "finger-tapping",
+    "finger-tapping-assessment": "finger-tapping",
+    "finger-tap": "finger-tapping",
+    "fist-open-close": "fist-open-close",
+    "fist_open_close": "fist-open-close",
+    "fist-open-close-test": "fist-open-close",
+    "fist-open-close-assessment": "fist-open-close",
+}
+
 def normalize_test_name(t: str | None) -> str:
     t = (t or "").strip().lower()
-    if t == "finger-taping":
-        t = "finger-tapping"
-    return t
+    if not t:
+        return ""
+    t = t.replace(" ", "-").replace("_", "-")
+    t = t.replace("&", "and")
+    while "--" in t:
+        t = t.replace("--", "-")
+    return _TEST_NORMALIZATION_ALIASES.get(t, t)
 
 def _ensure_dir(p: Path) -> None:
     p.mkdir(parents=True, exist_ok=True)

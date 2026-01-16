@@ -3,7 +3,7 @@ import react from "@vitejs/plugin-react-swc";
 import path from "path";
 import { componentTagger } from "lovable-tagger";
 
-const BACKEND = process.env.BACKEND_ORIGIN || "http://localhost:5174"; // use http here
+const BACKEND = process.env.BACKEND_ORIGIN || "http://localhost:8000"; // defaults to FastAPI dev server
 const WS_TARGET = BACKEND.replace(/^http/, "ws"); // -> ws://localhost::5174 or ws://backend:5174
 
 export default defineConfig(({ mode }) => ({

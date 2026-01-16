@@ -34,7 +34,7 @@ const modelForTest = (testId?: string) => {
   }
 };
 
-const MIN_RECORDING_TIME = 35; // seconds
+const MIN_RECORDING_TIME = 12; // seconds
 
 const VideoRecording = () => {
   const { id, testId } = useParams<{ id: string; testId: string }>();
@@ -50,15 +50,15 @@ const VideoRecording = () => {
   const [completedTests, setCompletedTests] = useState<string[]>([]);
   const [wsConnected, setWsConnected] = useState(false);
 
-  const currentTest = AVAILABLE_TESTS.find(
-    (test) => test.id === selectedTests[currentTestIndex]
-  );
   const totalTests = selectedTests.length;
-  const progress =
-    ((currentTestIndex +
-      (completedTests.includes(selectedTests[currentTestIndex]) ? 1 : 0)) /
-      totalTests) *
-    100;
+  const currentTestId = selectedTests[currentTestIndex];
+  const currentTest = AVAILABLE_TESTS.find((test) => test.id === currentTestId);
+  const isCurrentTestCompleted = currentTestId
+    ? completedTests.includes(currentTestId)
+    : false;
+  const progress = totalTests === 0
+    ? 0
+    : ((currentTestIndex + (isCurrentTestCompleted ? 1 : 0)) / totalTests) * 100;
 
   // Media refs
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -67,8 +67,55 @@ const VideoRecording = () => {
 
   // Recording refs
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
   const recordedChunks = useRef<Blob[]>([]);
   const recordingRef = useRef(false);
+
+  const ensureCameraStream = async (): Promise<boolean> => {
+    if (mediaStreamRef.current && mediaStreamRef.current.active) {
+      if (videoRef.current && videoRef.current.srcObject !== mediaStreamRef.current) {
+        videoRef.current.srcObject = mediaStreamRef.current;
+        await videoRef.current.play().catch(() => {});
+      }
+      return true;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "user" },
+        audio: false,
+      });
+      mediaStreamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play().catch(() => {});
+      }
+      return true;
+    } catch {
+      toast({
+        title: "Camera Access Denied",
+        description: "Allow camera access to record the test.",
+        variant: "destructive",
+      });
+      return false;
+    }
+  };
+
+  const releaseCameraStream = () => {
+    const stream = mediaStreamRef.current;
+    if (stream) {
+      stream.getTracks().forEach((track) => track.stop());
+      mediaStreamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    const overlay = overlayRef.current;
+    if (overlay) {
+      const ctx = overlay.getContext("2d");
+      if (ctx) ctx.clearRect(0, 0, overlay.width, overlay.height);
+    }
+  };
 
   useEffect(() => {
     recordingRef.current = isRecording;
@@ -82,29 +129,54 @@ const VideoRecording = () => {
 
   // ---- Regular COMPUTER CAMERA init ----
   useEffect(() => {
+    if (selectedTests.length === 0) {
+      return undefined;
+    }
+
+    let isMounted = true;
     (async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user" }, // laptop/desktop webcam
-          audio: false,
-        });
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          await videoRef.current.play().catch(() => {});
-        }
-      } catch {
-        toast({
-          title: "Camera Access Denied",
-          description: "Allow camera access to record the test.",
-          variant: "destructive",
-        });
+      if (isMounted) {
+        await ensureCameraStream();
       }
     })();
+
     return () => {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      isMounted = false;
+      stopFrameLoop();
+
+      if (wsRef.current) {
+        wsEndAndClose(recordingRef.current);
+      }
+
+      if (mediaRecorderRef.current) {
+        const recorder = mediaRecorderRef.current;
+        mediaRecorderRef.current = null;
+        recorder.ondataavailable = null;
+        recorder.onstop = null;
+        try {
+          if (recorder.state !== "inactive") {
+            recorder.stop();
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+
+      recordedChunks.current = [];
+      releaseCameraStream();
+
+      const overlay = overlayRef.current;
+      if (overlay) {
+        const ctx = overlay.getContext("2d");
+        if (ctx) ctx.clearRect(0, 0, overlay.width, overlay.height);
+      }
+
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [selectedTests.length]);
 
   // ---- Recording timer ----
   useEffect(() => {
@@ -149,10 +221,12 @@ const VideoRecording = () => {
     ws.onclose = () => {
       setWsConnected(false);
       stopFrameLoop();
+      wsRef.current = null;
     };
     ws.onerror = () => {
       setWsConnected(false);
       stopFrameLoop();
+      wsRef.current = null;
     };
   };
 
@@ -162,14 +236,29 @@ const VideoRecording = () => {
     }
   };
 
-  const wsEndAndClose = () => {
-    if (wsRef.current?.readyState === 1) {
-      wsRef.current.send(JSON.stringify({ type: "end" }));
+  const wsEndAndClose = (sendEnd: boolean = true) => {
+    const ws = wsRef.current;
+    if (!ws) return;
+
+    if (sendEnd && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "end" }));
     }
+
+    ws.onopen = null;
+    ws.onmessage = null;
+    ws.onclose = null;
+    ws.onerror = null;
+    wsRef.current = null;
+    setWsConnected(false);
+
+    const delay = sendEnd ? 150 : 0;
     setTimeout(() => {
-      wsRef.current?.close();
-      wsRef.current = null;
-    }, 150);
+      try {
+        ws.close();
+      } catch {
+        /* ignore */
+      }
+    }, delay);
   };
 
   // ---- Frame push loop ----
@@ -307,22 +396,45 @@ const VideoRecording = () => {
 
   // ---- Recording handlers ----
   const handleStartRecording = async () => {
+    if (isRecording) return;
+
+    if (!currentTestId) {
+      toast({
+        title: "No Test Selected",
+        description: "Please choose a test before recording.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (isCurrentTestCompleted) {
+      setCompletedTests((prev) => prev.filter((id) => id !== currentTestId));
+    }
+
+    const streamReady = await ensureCameraStream();
+    if (!streamReady || !videoRef.current || !videoRef.current.srcObject) {
+      return;
+    }
+
+    if (wsRef.current) {
+      wsEndAndClose(false);
+    }
+
     setIsRecording(true);
     setIsPaused(false);
     setRecordingTime(0);
+    recordingRef.current = true;
 
-    if (videoRef.current && videoRef.current.srcObject) {
-      recordedChunks.current = [];
-      const stream = videoRef.current.srcObject as MediaStream;
-      const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: "video/webm",
-      });
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) recordedChunks.current.push(event.data);
-      };
-      mediaRecorderRef.current = mediaRecorder;
-      mediaRecorder.start();
-    }
+    recordedChunks.current = [];
+    const stream = videoRef.current.srcObject as MediaStream;
+    const mediaRecorder = new MediaRecorder(stream, {
+      mimeType: "video/webm",
+    });
+    mediaRecorder.ondataavailable = (event) => {
+      if (event.data.size > 0) recordedChunks.current.push(event.data);
+    };
+    mediaRecorderRef.current = mediaRecorder;
+    mediaRecorder.start();
 
     wsInit();
   };
@@ -353,18 +465,25 @@ const VideoRecording = () => {
 
     if (!mediaRecorderRef.current) return;
 
+    const activeTestId = currentTestId || currentTest?.id || "";
+
     wsEndAndClose();
     stopFrameLoop();
 
     return new Promise<void>((resolve) => {
-      mediaRecorderRef.current!.onstop = async () => {
+      const recorder = mediaRecorderRef.current!;
+      recorder.onstop = async () => {
         setIsRecording(false);
         setIsPaused(false);
+        recordingRef.current = false;
+        mediaRecorderRef.current = null;
 
-        const blob = new Blob(recordedChunks.current, { type: "video/webm" });
+        const chunks = [...recordedChunks.current];
+        recordedChunks.current = [];
+        const blob = new Blob(chunks, { type: "video/webm" });
         const formData = new FormData();
         formData.append("patient_id", id || "");
-        formData.append("test_name", currentTest?.name || "unknown");
+        formData.append("test_name", activeTestId || "unknown");
         formData.append("video", blob, "recording.webm");
 
         try {
@@ -374,10 +493,20 @@ const VideoRecording = () => {
           });
           if (resp.ok) {
             const data = await resp.json();
+            const diskHint = data?.disk_path
+              ? data.disk_path
+              : data?.filename
+              ? `backend/recordings/${data.filename}`
+              : undefined;
             toast({
               title: "Recording Saved",
-              description: `Saved as ${data.filename}`,
+              description: diskHint ? `Saved to ${diskHint}` : `Saved as ${data.filename}`,
             });
+            if (data?.filename) {
+              console.info(
+                `[VideoRecording] Saved video '${data.filename}' at '${diskHint || "(unknown path)"}'`
+              );
+            }
           } else throw new Error("Upload failed");
         } catch (err) {
           console.error("Upload error:", err);
@@ -388,14 +517,39 @@ const VideoRecording = () => {
           });
         }
 
-        setCompletedTests((prev) => [...prev, currentTest?.id || ""]);
+        setCompletedTests((prev) => {
+          if (!activeTestId || prev.includes(activeTestId)) {
+            return prev;
+          }
+          return [...prev, activeTestId];
+        });
+        releaseCameraStream();
         resolve();
       };
-      mediaRecorderRef.current!.stop();
+      try {
+        recorder.stop();
+      } catch {
+        resolve();
+      }
     });
   };
 
   const handleNextTest = () => {
+    if (isRecording) {
+      toast({
+        title: "Recording In Progress",
+        description: "Stop or reset the current recording before moving to the next test.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsRecording(false);
+    setIsPaused(false);
+    recordingRef.current = false;
+    stopFrameLoop();
+    wsEndAndClose(false);
+    recordedChunks.current = [];
     if (currentTestIndex < selectedTests.length - 1) {
       setCurrentTestIndex((prev) => prev + 1);
       setRecordingTime(0);
@@ -407,20 +561,68 @@ const VideoRecording = () => {
           overlayRef.current.width,
           overlayRef.current.height
         );
+  void ensureCameraStream();
     } else {
+      releaseCameraStream();
       navigate(`/patient/${id}/video-summary/${testId}`);
     }
   };
 
+  const handleRetakeCurrentTest = () => {
+    if (!currentTestId) {
+      return;
+    }
+    if (isRecording) {
+      toast({
+        title: "Recording In Progress",
+        description: "Stop or reset before starting a new take.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setCompletedTests((prev) => prev.filter((id) => id !== currentTestId));
+    setRecordingTime(0);
+    setIsPaused(false);
+    recordingRef.current = false;
+    const ctx = overlayRef.current?.getContext("2d");
+    if (ctx && overlayRef.current) {
+      ctx.clearRect(0, 0, overlayRef.current.width, overlayRef.current.height);
+    }
+    recordedChunks.current = [];
+    void ensureCameraStream();
+    toast({
+      title: "Ready to Retake",
+      description: "Start recording again when you are ready.",
+    });
+  };
+
   const handleReset = () => {
+    if (mediaRecorderRef.current) {
+      const recorder = mediaRecorderRef.current;
+      mediaRecorderRef.current = null;
+      recorder.ondataavailable = null;
+      recorder.onstop = null;
+      try {
+        if (recorder.state !== "inactive") {
+          recorder.stop();
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
+    recordedChunks.current = [];
     setIsRecording(false);
     setIsPaused(false);
     setRecordingTime(0);
+    recordingRef.current = false;
     wsEndAndClose();
     stopFrameLoop();
     const ctx = overlayRef.current?.getContext("2d");
     if (ctx && overlayRef.current)
       ctx.clearRect(0, 0, overlayRef.current.width, overlayRef.current.height);
+    releaseCameraStream();
   };
 
   const formatTime = (s: number) =>
@@ -466,6 +668,28 @@ const VideoRecording = () => {
 
   const minRemaining = Math.max(0, MIN_RECORDING_TIME - recordingTime);
   const minMet = minRemaining === 0;
+
+  if (totalTests === 0 || !currentTestId || !currentTest) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center px-6">
+        <Card className="max-w-lg w-full">
+          <CardHeader>
+            <CardTitle>No Tests Selected</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              There are no tests queued for recording. Please return to the test selection page and choose at least one assessment to begin.
+            </p>
+            <Button asChild>
+              <Link to={`/patient/${id}/test-selection`}>
+                Back to Test Selection
+              </Link>
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background">
@@ -664,15 +888,7 @@ const VideoRecording = () => {
                   </div>
 
                   <div className="flex justify-center space-x-4">
-                    {!isRecording ? (
-                      <Button
-                        onClick={handleStartRecording}
-                        className="bg-[hsl(var(--secondary))] text-black hover:bg-[hsl(var(--primary-hover))] hover:text-white"
-                      >
-                        <Play className="mr-2 h-4 w-4" />
-                        Start Recording
-                      </Button>
-                    ) : (
+                    {isRecording ? (
                       <>
                         <Button onClick={handlePauseRecording} variant="outline">
                           {isPaused ? (
@@ -700,11 +916,22 @@ const VideoRecording = () => {
                           Reset
                         </Button>
                       </>
+                    ) : (
+                      !isCurrentTestCompleted && (
+                        <Button
+                          onClick={handleStartRecording}
+                          className="bg-[hsl(var(--secondary))] text-black hover:bg-[hsl(var(--primary-hover))] hover:text-white"
+                          disabled={!currentTestId}
+                        >
+                          <Play className="mr-2 h-4 w-4" />
+                          Start Recording
+                        </Button>
+                      )
                     )}
                   </div>
                 </div>
 
-                {completedTests.includes(selectedTests[currentTestIndex]) && (
+                {isCurrentTestCompleted && (
                   <div className="mt-6 text-center">
                     <div className="bg-success/10 border border-success rounded-lg p-4 mb-4">
                       <CheckCircle className="mx-auto h-8 w-8 text-success mb-2" />
@@ -712,23 +939,32 @@ const VideoRecording = () => {
                         Test Completed Successfully!
                       </p>
                     </div>
-                    {currentTestIndex < selectedTests.length - 1 ? (
+                    <div className="flex flex-col items-center gap-3">
                       <Button
-                        onClick={handleNextTest}
-                        className="bg-[hsl(var(--secondary))] text-black hover:bg-[hsl(var(--primary-hover))] hover:text-white"
+                        variant="outline"
+                        onClick={handleRetakeCurrentTest}
+                        className="w-full sm:w-auto"
                       >
-                        Next Test ({currentTestIndex + 2} of {totalTests})
+                        Retake Recording
                       </Button>
-                    ) : (
-                      <Button
-                        onClick={() =>
-                          navigate(`/patient/${id}/video-summary/${testId}`)
-                        }
-                        className="bg-primary hover:bg-primary-hover"
-                      >
-                        View Summary
-                      </Button>
-                    )}
+                      {currentTestIndex < selectedTests.length - 1 ? (
+                        <Button
+                          onClick={handleNextTest}
+                          className="bg-[hsl(var(--secondary))] text-black hover:bg-[hsl(var(--primary-hover))] hover:text-white"
+                        >
+                          Next Test ({currentTestIndex + 2} of {totalTests})
+                        </Button>
+                      ) : (
+                        <Button
+                          onClick={() =>
+                            navigate(`/patient/${id}/video-summary/${testId}`)
+                          }
+                          className="bg-primary hover:bg-primary-hover"
+                        >
+                          View Summary
+                        </Button>
+                      )}
+                    </div>
                   </div>
                 )}
               </CardContent>

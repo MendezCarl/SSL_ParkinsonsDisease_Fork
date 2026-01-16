@@ -37,3 +37,7 @@ backend/__pycache__/patient_manager.cpython-310.pyc
 SSL_ParkinsonsDisease_Fork.code-workspace
 backend/__pycache__/patient_manager.cpython-310.pyc
 backend/__pycache__/patient_manager.cpython-310.pyc
+frontend/src/pages/VideoRecording copy.tsx
+/backend/recordings
+/backend/dtw_runs/finger-tapping
+/backend/dtw_runs/fist-open-close

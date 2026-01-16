@@ -137,6 +137,54 @@
       "date": "2025-10-03T15:47:05.174328",
       "recording_file": "ws_recording_2025-10-03_11-47-04_4f801904-87a8-475f-a2e7-22d46caf500b.mp4",
       "frame_count": 469
+    },
+    {
+      "test_name": "finger-tapping",
+      "date": "2025-10-30T16:13:58.939436",
+      "recording_file": "ws_recording_2025-10-30_12-13-58_6617a9f6-fb65-4fc3-8c67-b09b3871398f.mp4",
+      "frame_count": 114
+    },
+    {
+      "test_name": "finger-tapping",
+      "date": "2025-10-30T16:14:40.343560",
+      "recording_file": "ws_recording_2025-10-30_12-14-39_99d9cd87-e83b-4c5b-b2ea-97c7b53f01c3.mp4",
+      "frame_count": 464
+    },
+    {
+      "test_name": "finger-tapping",
+      "date": "2025-10-30T16:33:21.559143",
+      "recording_file": "ws_recording_2025-10-30_12-33-21_35e28923-9624-47a6-9414-53daf7d0ad06.mp4",
+      "frame_count": 193
+    },
+    {
+      "test_name": "fist-open-close",
+      "date": "2025-10-30T16:33:59.082650",
+      "recording_file": "ws_recording_2025-10-30_12-33-58_de61efd9-f998-453e-9264-205c56e72bbf.mp4",
+      "frame_count": 366
+    },
+    {
+      "test_name": "finger-tapping",
+      "date": "2025-10-30T16:35:17.711781",
+      "recording_file": "ws_recording_2025-10-30_12-35-17_15d77b11-1253-4b29-b9c8-0d74aa5223e0.mp4",
+      "frame_count": 213
+    },
+    {
+      "test_name": "fist-open-close",
+      "date": "2025-10-30T16:35:40.987718",
+      "recording_file": "ws_recording_2025-10-30_12-35-40_3e999918-270f-453d-9392-96ae586ac675.mp4",
+      "frame_count": 209
+    },
+    {
+      "test_name": "finger-tapping",
+      "date": "2025-10-30T20:44:33.452935",
+      "recording_file": "ws_recording_2025-10-30_16-44-33_0c3c3458-b89e-43de-93f2-ba87d506dfe0.mp4",
+      "frame_count": 197
+    },
+    {
+      "test_name": "fist-open-close",
+      "date": "2025-10-30T20:44:54.770830",
+      "recording_file": "ws_recording_2025-10-30_16-44-54_28719c1e-f67b-47a6-a82e-4bee8dfa5bef.mp4",
+      "frame_count": 183
     }
   ],
   "marys2844332156": [

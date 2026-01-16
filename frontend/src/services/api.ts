@@ -1,5 +1,46 @@
+const API_BASE_URL = 'http://localhost:8000'; //not using docker if you are swich back to 8000
 
-const API_BASE_URL = 'http://localhost:8000';
+export function normalizeBirthDate(value: string): string {
+  if (!value) return '';
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+
+  const isoMatch = trimmed.match(/^(\d{4})[\/-](\d{2})[\/-](\d{2})$/);
+  if (isoMatch) {
+    return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
+  }
+
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) return '';
+
+  const year = parsed.getUTCFullYear();
+  const month = String(parsed.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(parsed.getUTCDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+//remove later
+const calculateAge = (birthDate: string): number => {
+  const normalized = normalizeBirthDate(birthDate);
+  if (!normalized) return 0;
+
+  const [yearStr, monthStr, dayStr] = normalized.split('-');
+  const year = Number(yearStr);
+  const month = Number(monthStr);
+  const day = Number(dayStr);
+
+  if (!year || !month || !day) return 0;
+
+  const today = new Date();
+  let age = today.getFullYear() - year;
+  const monthDiff = today.getMonth() + 1 - month;
+
+  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < day)) {
+    age--;
+  }
+  
+  return Math.max(0, age);
+};
 
 // Types for backend API
 interface BackendPatient {
@@ -27,6 +68,7 @@ interface BackendPatient {
 
 interface BackendPatientCreate {
   name: string;
+  age: number;
   birthDate: string;
   height: string;
   weight: string;
@@ -37,6 +79,7 @@ interface BackendPatientCreate {
 
 interface BackendPatientUpdate {
   name?: string;
+  age?: number;
   birthDate?: string;
   height?: string;
   weight?: string;
@@ -58,6 +101,19 @@ const convertBackendToFrontend = (backendPatient: BackendPatient) => {
   const nameParts = name.split(' ');
   const firstName = nameParts[0] || '';
   const lastName = nameParts.slice(1).join(' ') || '';
+  const normalizedBirthDate = normalizeBirthDate(backendPatient.birthDate);
+  const doctorNotesHistoryRaw = backendPatient.doctors_notes_history || [];
+  const labResultsHistoryRaw = backendPatient.lab_results_history || [];
+
+  const latestDoctorNote = doctorNotesHistoryRaw
+    .map(entry => ({
+      ...entry,
+      parsedDate: new Date(entry.date)
+    }))
+    .sort((a, b) => (b.parsedDate?.getTime() || 0) - (a.parsedDate?.getTime() || 0))[0];
+
+  const lastVisit = latestDoctorNote?.parsedDate ?? null;
+  const primaryPhysician = latestDoctorNote?.added_by?.trim() || null;
   
   // Debug logging (commented out)
   // console.log('Converting backend patient:', backendPatient.patient_id);
@@ -69,26 +125,28 @@ const convertBackendToFrontend = (backendPatient: BackendPatient) => {
     firstName,
     lastName,
     recordNumber: backendPatient.patient_id || '', // Using patient_id as record number
-    birthDate: backendPatient.birthDate || '',
+  birthDate: normalizedBirthDate || backendPatient.birthDate || '',
     height: `${backendPatient.height || 0} cm`,
     weight: `${backendPatient.weight || 0} kg`,
     labResults: JSON.stringify(backendPatient.lab_results || {}),
     doctorNotes: backendPatient.doctors_notes || '',
-    labResultsHistory: (backendPatient.lab_results_history || []).map(entry => ({
+    labResultsHistory: labResultsHistoryRaw.map(entry => ({
       id: entry.id,
       date: new Date(entry.date),
       results: entry.results,
       addedBy: entry.added_by
     })),
-    doctorNotesHistory: (backendPatient.doctors_notes_history || []).map(entry => ({
+    doctorNotesHistory: doctorNotesHistoryRaw.map(entry => ({
       id: entry.id,
       date: new Date(entry.date),
       note: entry.note,
       addedBy: entry.added_by
     })),
     severity: mapSeverity(backendPatient.severity || 'low'),
-    createdAt: new Date(), // Backend doesn't provide this, using current date
-    updatedAt: new Date(), // Backend doesn't provide this, using current date
+    lastVisit,
+    primaryPhysician,
+    createdAt: lastVisit ?? new Date(), // Backend doesn't provide this, approximated from last visit
+    updatedAt: lastVisit ?? new Date(), // Backend doesn't provide this, approximated from last visit
   };
 };
 
@@ -98,13 +156,24 @@ const convertFrontendToBackend = (frontendPatient: any): BackendPatientCreate =>
   
   const heightStr = (frontendPatient.height || '').replace(/[^\d.]/g, '');
   const weightStr = (frontendPatient.weight || '').replace(/[^\d.]/g, '');
+  const normalizedBirthDate = normalizeBirthDate(frontendPatient.birthDate);
   
+  let parsedLabResults: Record<string, any> = {};
+  if (frontendPatient.labResults) {
+    try {
+      parsedLabResults = JSON.parse(frontendPatient.labResults);
+    } catch {
+      parsedLabResults = { notes: frontendPatient.labResults };
+    }
+  }
+
   return {
     name: fullName,
-    birthDate: frontendPatient.birthDate,
-    height: heightStr || '0', // Keep as string for create endpoint
-    weight: weightStr || '0', // Keep as string for create endpoint
-    lab_results: frontendPatient.labResults ? JSON.parse(frontendPatient.labResults) : {},
+    age: calculateAge(normalizedBirthDate || frontendPatient.birthDate), // Use your existing function
+    birthDate: normalizedBirthDate || frontendPatient.birthDate,
+    height: heightStr || '0',
+    weight: weightStr || '0',
+    lab_results: parsedLabResults,
     doctors_notes: frontendPatient.doctorNotes || '',
     severity: mapSeverityToBackend(frontendPatient.severity),
   };
@@ -112,48 +181,42 @@ const convertFrontendToBackend = (frontendPatient: any): BackendPatientCreate =>
 
 // Map severity from backend to frontend
 export const mapSeverity = (backendSeverity: string): 'Stage 1' | 'Stage 2' | 'Stage 3' | 'Stage 4' | 'Stage 5' => {
-  switch (backendSeverity.toLowerCase()) {
-    case 'mild':
-      return 'Stage 1';
-    case 'medium':
-      return 'Stage 2';
-    case 'severe':
-      return 'Stage 4';
-    case 'low':
-      return 'Stage 1';
-    case 'high':
-      return 'Stage 5';
-    case 'stage 1':
-      return 'Stage 1';
-    case 'stage 2':
-      return 'Stage 2';
-    case 'stage 3':
-      return 'Stage 3';
-    case 'stage 4':
-      return 'Stage 4';
-    case 'stage 5':
-      return 'Stage 5';
-    default:
-      return 'Stage 1';
-  }
+  const normalized = (backendSeverity || '').trim().toLowerCase();
+  const mapping: Record<string, 'Stage 1' | 'Stage 2' | 'Stage 3' | 'Stage 4' | 'Stage 5'> = {
+    'stage 1': 'Stage 1',
+    'stage 2': 'Stage 2',
+    'stage 3': 'Stage 3',
+    'stage 4': 'Stage 4',
+    'stage 5': 'Stage 5',
+    'low': 'Stage 1',
+    'mild': 'Stage 2',
+    'medium': 'Stage 3',
+    'moderate': 'Stage 3',
+    'high': 'Stage 4',
+    'severe': 'Stage 5',
+  };
+
+  return mapping[normalized] ?? 'Stage 1';
 };
 
 // Map severity from frontend to backend
 const mapSeverityToBackend = (frontendSeverity: string): string => {
-  switch (frontendSeverity) {
-    case 'Stage 1':
-      return 'mild';
-    case 'Stage 2':
-      return 'medium';
-    case 'Stage 3':
-      return 'medium';
-    case 'Stage 4':
-      return 'severe';
-    case 'Stage 5':
-      return 'severe';
-    default:
-      return 'mild';
-  }
+  const normalized = (frontendSeverity || '').trim().toLowerCase();
+  const mapping: Record<string, string> = {
+    'stage 1': 'Stage 1',
+    'stage 2': 'Stage 2',
+    'stage 3': 'Stage 3',
+    'stage 4': 'Stage 4',
+    'stage 5': 'Stage 5',
+    'low': 'Stage 1',
+    'mild': 'Stage 2',
+    'medium': 'Stage 3',
+    'moderate': 'Stage 3',
+    'high': 'Stage 4',
+    'severe': 'Stage 5',
+  };
+
+  return mapping[normalized] ?? 'Stage 1';
 };
 
 // API service class
@@ -275,7 +338,12 @@ class ApiService {
       backendData.name = fullName;
     }
     
-    if (updateData.age !== undefined) backendData.birthDate = updateData.age;
+    if (updateData.birthDate !== undefined) {
+      const normalized = normalizeBirthDate(updateData.birthDate);
+      backendData.birthDate = normalized || updateData.birthDate;
+      backendData.age = calculateAge(normalized || updateData.birthDate); // Use your existing function
+    }
+    
     if (updateData.height) {
       const heightStr = updateData.height.replace(/[^\d.]/g, '');
       backendData.height = heightStr || '0';
@@ -302,7 +370,7 @@ class ApiService {
             console.log('Backend update data:', backendData);
         console.log('Data types:', {
           name: typeof backendData.name,
-          age: typeof backendData.birthDate,
+          birthDate: typeof backendData.birthDate,
           height: typeof backendData.height,
           weight: typeof backendData.weight,
           severity: typeof backendData.severity
@@ -372,7 +440,7 @@ class ApiService {
 
   // Get test history for a patient
   async getPatientTests(patientId: string): Promise<ApiResponse<any[]>> {
-    const response = await this.request<{ tests: any[] }>(`/patients/${patientId}/tests`);
+    const response = await this.request<{ tests: any }>(`/patients/${patientId}/tests`);
     if (response.success && response.data) {
       // Optionally, map/convert test data here
       return { success: true, data: response.data.tests };
@@ -393,4 +461,4 @@ class ApiService {
 
 // Export singleton instance
 export const apiService = new ApiService();
-export default apiService; 
+export default apiService;

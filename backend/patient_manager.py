@@ -5,6 +5,36 @@ from datetime import datetime
 from typing import Dict, List, Optional, Union
 import threading
 
+
+def normalize_severity(value: str) -> str:
+    """Map various severity descriptors to a canonical Stage 1-5 label."""
+    if not value:
+        return "Stage 1"
+
+    normalized = value.strip().lower()
+
+    stage_map = {
+        "stage 1": "Stage 1",
+        "stage 2": "Stage 2",
+        "stage 3": "Stage 3",
+        "stage 4": "Stage 4",
+        "stage 5": "Stage 5",
+    }
+
+    if normalized in stage_map:
+        return stage_map[normalized]
+
+    legacy_map = {
+        "low": "Stage 1",
+        "mild": "Stage 2",
+        "medium": "Stage 3",
+        "moderate": "Stage 3",
+        "high": "Stage 4",
+        "severe": "Stage 5",
+    }
+
+    return legacy_map.get(normalized, "Stage 1")
+
 TEST_HISTORY_FILE = os.path.join(os.path.dirname(__file__), 'test_history.json')
 
 class Patient:
@@ -25,7 +55,7 @@ class Patient:
         self.weight = weight  # in kg
         self.lab_results = lab_results or {}
         self.doctors_notes = doctors_notes
-        self.severity = severity  # low, medium, high
+        self.severity = normalize_severity(severity)
         self.patient_id = patient_id or self._generate_id()
         self.lab_results_history = lab_results_history or []
         self.doctors_notes_history = doctors_notes_history or []
@@ -88,7 +118,7 @@ class Patient:
             weight=weight,
             lab_results=data.get("lab_results", {}),
             doctors_notes=data.get("doctors_notes", ""),
-            severity=data.get("severity", "low"),
+            severity=normalize_severity(data.get("severity", "Stage 1")),
             lab_results_history=data.get("lab_results_history", []),
             doctors_notes_history=data.get("doctors_notes_history", [])
         )
@@ -229,8 +259,14 @@ class PatientManager:
             if weight_value is not None and (weight_value < 0 or weight_value > 500):
                 errors["weight"] = "Weight must be between 0 and 500 kg"
 
-        if "severity" in data and data["severity"] not in ["low", "medium", "high"]:
-            errors["severity"] = "Severity must be one of: low, medium, high"
+        if "severity" in data:
+            severity_norm = (str(data["severity"]) or "").strip().lower()
+            allowed = {"low", "medium", "high", "mild", "moderate", "severe",
+                       "stage 1", "stage 2", "stage 3", "stage 4", "stage 5"}
+            if severity_norm not in allowed:
+                errors["severity"] = "Severity must be one of: Stage 1-5 (or legacy mild/moderate/severe)"
+            elif "severity" not in errors:
+                data["severity"] = normalize_severity(data["severity"])
 
         return errors
 
@@ -310,11 +346,8 @@ class PatientManager:
                 height_value = updated_data["height"]
                 if isinstance(height_value, str):
                     import re
-                    numeric_match = re.search(r'(\d+\.?\d*)', height_value)
-                    if numeric_match:
-                        patient.height = float(numeric_match.group(1))
-                    else:
-                        patient.height = 0.0  # Default fallback
+                    numeric_match = re.search(r"(\d+\.?\d*)", height_value)
+                    patient.height = float(numeric_match.group(1)) if numeric_match else 0.0
                 else:
                     patient.height = float(height_value)
             if "weight" in updated_data:
@@ -322,11 +355,8 @@ class PatientManager:
                 weight_value = updated_data["weight"]
                 if isinstance(weight_value, str):
                     import re
-                    numeric_match = re.search(r'(\d+\.?\d*)', weight_value)
-                    if numeric_match:
-                        patient.weight = float(numeric_match.group(1))
-                    else:
-                        patient.weight = 0.0  # Default fallback
+                    numeric_match = re.search(r"(\d+\.?\d*)", weight_value)
+                    patient.weight = float(numeric_match.group(1)) if numeric_match else 0.0
                 else:
                     patient.weight = float(weight_value)
             if "lab_results" in updated_data:
@@ -338,7 +368,7 @@ class PatientManager:
             if "doctors_notes_history" in updated_data:
                 patient.doctors_notes_history = updated_data["doctors_notes_history"]
             if "severity" in updated_data:
-                patient.severity = updated_data["severity"]
+                patient.severity = normalize_severity(updated_data["severity"])
 
             success = self.save_patients()
             if success:
@@ -383,7 +413,8 @@ class PatientManager:
             filtered_patients = [p for p in filtered_patients if p.age <= criteria["max_age"]]
 
         if "severity" in criteria:
-            filtered_patients = [p for p in filtered_patients if p.severity == criteria["severity"]]
+            desired = normalize_severity(criteria["severity"])
+            filtered_patients = [p for p in filtered_patients if p.severity == desired]
 
         return filtered_patients
 

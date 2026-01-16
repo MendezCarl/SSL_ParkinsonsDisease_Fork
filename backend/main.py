@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from datetime import datetime
 import os
 import shutil
+import mimetypes
 import uvicorn
 from subprocess import run, PIPE
 import uuid
@@ -65,13 +66,16 @@ app.add_middleware(
         "http://localhost:8000",
         "http://localhost:8080",
         "http://localhost:5173",
+        "http://localhost:5174",  # Add this line
         "http://localhost:3000",
         "http://127.0.0.1:8000",
         "http://127.0.0.1:8080",
         "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174",  # Add this line too
         "http://127.0.0.1:3000",
-        "http://localhost:5174"
-    ],  # Adjust this in production to your frontend's URL
+        "http://localhost:8001",
+        "http://localhost:8000/patients",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -80,16 +84,21 @@ app.add_middleware(
 # ============ Models ============
 class PatientCreate(BaseModel):
     name: str
-    age: int = Field(..., ge=0, le=120)
+    # age: int = Field(..., ge=0, le=120)
+    birthDate: str  # Add this line
     height: str = Field(..., min_length=1)
     weight: str = Field(..., min_length=1)
     lab_results: Optional[Dict] = Field(default_factory=dict)
     doctors_notes: Optional[str] = ""
-    severity: str = Field("low", pattern="^(low|medium|high)$")
+    severity: str = Field(
+        "Stage 1",
+        pattern="^(low|medium|high|mild|moderate|severe|stage [1-5])$"
+    )
+
 
 class PatientUpdate(BaseModel):
     name: Optional[str] = None
-    age: Optional[int] = Field(None, ge=0, le=120)
+    # age: Optional[int] = Field(None, ge=0, le=120)
     birthDate: Optional[str] = None
     height: Optional[str] = None
     weight: Optional[str] = None
@@ -97,7 +106,10 @@ class PatientUpdate(BaseModel):
     lab_results_history: Optional[List[Dict]] = None
     doctors_notes: Optional[str] = None
     doctors_notes_history: Optional[List[Dict]] = None
-    severity: Optional[str] = Field(None, pattern="^(low|medium|high)$")
+    severity: Optional[str] = Field(
+        None,
+        pattern="^(low|medium|high|mild|moderate|severe|stage [1-5])$"
+    )
 
 class PatientResponse(BaseModel):
     patient_id: str
@@ -396,6 +408,7 @@ async def create_patient(patient: PatientCreate):
     doctors_notes = patient.doctors_notes if patient.doctors_notes is not None else ""
     result = await async_create_patient(
         name=patient.name,
+        # age=patient.age,  # Add this line
         birthDate=patient.birthDate,
         height=height,
         weight=weight,
@@ -466,19 +479,30 @@ async def upload_video(
     video: UploadFile = File(...)
 ):
     try:
-        now_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        filename = f"{patient_id}_{test_name}_{now_str}.mov"
+        canonical_test = normalize_test_name(test_name) or "unknown"
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+        original_suffix = Path(getattr(video, "filename", "") or "").suffix.lower()
+        allowed_suffixes = {".mp4", ".mov", ".webm", ".mkv"}
+        suffix = original_suffix if original_suffix in allowed_suffixes else ".webm"
+
+        filename = f"{patient_id}_{canonical_test}_{timestamp}{suffix}"
         filepath = os.path.join(RECORDINGS_DIR, filename)
 
         with open(filepath, "wb") as buffer:
             shutil.copyfileobj(video.file, buffer)
 
+        message = f"Video saved to {filepath}"
+        print(f"[upload_video] patient={patient_id} test={canonical_test} file={filepath}")
+
         return {
             "success": True,
             "filename": filename,
             "path": f"recordings/{filename}",
+            "disk_path": filepath,
             "patient_id": patient_id,
-            "test_name": test_name
+            "test_name": canonical_test,
+            "message": message,
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -486,13 +510,22 @@ async def upload_video(
 @app.get("/videos/{patient_id}/{test_name}", response_model=Dict)
 def list_videos(patient_id: str, test_name: str):
     try:
+        canonical_test = normalize_test_name(test_name) or test_name
         files = os.listdir(RECORDINGS_DIR)
-        matching = [
-            f for f in files
-            if f.startswith(f"{patient_id}_{test_name}_") and (f.endswith(".mov") or f.endswith(".mp4"))
-        ]
+        matching = []
+        for f in files:
+            if not f.lower().endswith((".mov", ".mp4", ".webm", ".mkv")):
+                continue
+            if not f.startswith(f"{patient_id}_"):
+                continue
+            remainder = f[len(patient_id) + 1:]
+            test_segment = remainder.split("_", 1)[0]
+            if normalize_test_name(test_segment) == canonical_test:
+                matching.append(f)
+            elif canonical_test in f:
+                matching.append(f)
         matching.sort(
-            key=lambda f: os.path.getmtime(os.path.join(RECORDINGS_DIR, f)),
+            key=lambda fname: os.path.getmtime(os.path.join(RECORDINGS_DIR, fname)),
             reverse=True
         )
         return {"success": True, "videos": matching}
@@ -504,7 +537,9 @@ def get_recording_file(filename: str):
     file_path = os.path.join(RECORDINGS_DIR, filename)
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Video not found")
-    media_type = "video/mp4" if filename.endswith(".mp4") else "video/quicktime"
+    media_type, _ = mimetypes.guess_type(file_path)
+    if not media_type:
+        media_type = "application/octet-stream"
     return FileResponse(file_path, media_type=media_type)
 
 # ============ REST: Start Scripts ============

@@ -7,17 +7,17 @@
     "weight": "70.0",
     "lab_results": {},
     "doctors_notes": "",
-    "severity": "medium",
+    "severity": "Stage 2",
     "lab_results_history": [
       {
         "id": "lab_1",
-        "date": "2025-09-15T10:00:00Z",
+        "date": "2025-09-15T10:00:00.000Z",
         "results": "CBC: Normal, Dopamine markers: Elevated (120 ng/mL), Glucose: 95 mg/dL",
         "added_by": "Dr. Smith"
       },
       {
         "id": "lab_2",
-        "date": "2025-08-01T14:30:00Z",
+        "date": "2025-08-01T14:30:00.000Z",
         "results": "CBC: Normal, Dopamine markers: 105 ng/mL, Cholesterol: 180 mg/dL",
         "added_by": "Dr. Johnson"
       }
@@ -34,12 +34,6 @@
         "date": "2025-08-15T16:45:00.000Z",
         "note": "Started on new L-DOPA regimen. Monitor for side effects.",
         "added_by": "Dr. Johnson"
-      },
-      {
-        "id": "note_1759507545239",
-        "date": "2025-10-03T16:05:45.239Z",
-        "note": "Testing",
-        "added_by": "Current User"
       }
     ]
   },
@@ -51,7 +45,7 @@
     "weight": "68.5",
     "lab_results": {},
     "doctors_notes": "",
-    "severity": "mild",
+    "severity": "Stage 2",
     "lab_results_history": [
       {
         "id": "lab_mary_1",
@@ -83,7 +77,7 @@
     "weight": "82.0",
     "lab_results": {},
     "doctors_notes": "",
-    "severity": "medium",
+    "severity": "Stage 3",
     "lab_results_history": [
       {
         "id": "lab_robert_1",
@@ -121,7 +115,7 @@
     "weight": "59.0",
     "lab_results": {},
     "doctors_notes": "",
-    "severity": "severe",
+    "severity": "Stage 5",
     "lab_results_history": [
       {
         "id": "lab_linda_1",
@@ -159,7 +153,7 @@
     "weight": "77.0",
     "lab_results": {},
     "doctors_notes": "",
-    "severity": "severe",
+    "severity": "Stage 5",
     "lab_results_history": [
       {
         "id": "lab_david_1",
@@ -191,7 +185,7 @@
     "weight": "65.0",
     "lab_results": {},
     "doctors_notes": "",
-    "severity": "mild",
+    "severity": "Stage 1",
     "lab_results_history": [],
     "doctors_notes_history": [
       {
@@ -210,7 +204,7 @@
     "weight": "85.0",
     "lab_results": {},
     "doctors_notes": "",
-    "severity": "medium",
+    "severity": "Stage 3",
     "lab_results_history": [
       {
         "id": "lab_michael_1",
@@ -248,7 +242,7 @@
     "weight": "72.0",
     "lab_results": {},
     "doctors_notes": "",
-    "severity": "medium",
+    "severity": "Stage 3",
     "lab_results_history": [],
     "doctors_notes_history": [
       {
@@ -273,7 +267,7 @@
     "weight": "74.0",
     "lab_results": {},
     "doctors_notes": "",
-    "severity": "medium",
+    "severity": "Stage 3",
     "lab_results_history": [],
     "doctors_notes_history": [
       {
@@ -298,7 +292,7 @@
     "weight": "61.0",
     "lab_results": {},
     "doctors_notes": "",
-    "severity": "mild",
+    "severity": "Stage 2",
     "lab_results_history": [
       {
         "id": "lab_patricia_1",
@@ -342,7 +336,7 @@
     "weight": "80.0",
     "lab_results": {},
     "doctors_notes": "",
-    "severity": "severe",
+    "severity": "Stage 5",
     "lab_results_history": [
       {
         "id": "lab_charles_1",
@@ -380,7 +374,7 @@
     "weight": "58.0",
     "lab_results": {},
     "doctors_notes": "",
-    "severity": "medium",
+    "severity": "Stage 4",
     "lab_results_history": [
       {
         "id": "lab_1",
@@ -416,7 +410,7 @@
     "weight": "78.0",
     "lab_results": {},
     "doctors_notes": "",
-    "severity": "mild",
+    "severity": "Stage 1",
     "lab_results_history": [
       {
         "id": "lab_1",
@@ -453,7 +447,7 @@
     "weight": "64.0",
     "lab_results": {},
     "doctors_notes": "Advanced stage, caregiver support in place",
-    "severity": "severe",
+    "severity": "Stage 4",
     "lab_results_history": [],
     "doctors_notes_history": []
   },
@@ -465,7 +459,7 @@
     "weight": "73.0",
     "lab_results": {},
     "doctors_notes": "",
-    "severity": "mild",
+    "severity": "Stage 2",
     "lab_results_history": [
       {
         "id": "lab_kenneth_1",
@@ -503,7 +497,7 @@
     "weight": "67.0",
     "lab_results": {},
     "doctors_notes": "Tremor-dominant phenotype",
-    "severity": "medium",
+    "severity": "Stage 3",
     "lab_results_history": [],
     "doctors_notes_history": []
   },
@@ -515,7 +509,7 @@
     "weight": "71.0",
     "lab_results": {},
     "doctors_notes": "Non-motor symptoms predominant",
-    "severity": "medium",
+    "severity": "Stage 3",
     "lab_results_history": [],
     "doctors_notes_history": []
   },
@@ -527,7 +521,7 @@
     "weight": "60.0",
     "lab_results": {},
     "doctors_notes": "",
-    "severity": "medium",
+    "severity": "Stage 4",
     "lab_results_history": [
       {
         "id": "lab_helen_1",
@@ -565,7 +559,7 @@
     "weight": "84.0",
     "lab_results": {},
     "doctors_notes": "Participating in clinical trial",
-    "severity": "mild",
+    "severity": "Stage 1",
     "lab_results_history": [],
     "doctors_notes_history": []
   },
@@ -577,7 +571,7 @@
     "weight": "55.0",
     "lab_results": {},
     "doctors_notes": "Significant motor fluctuations",
-    "severity": "severe",
+    "severity": "Stage 5",
     "lab_results_history": [],
     "doctors_notes_history": []
   },
@@ -589,7 +583,7 @@
     "weight": "79.0",
     "lab_results": {},
     "doctors_notes": "Stable on current medication regimen",
-    "severity": "mild",
+    "severity": "Stage 2",
     "lab_results_history": [],
     "doctors_notes_history": []
   }
