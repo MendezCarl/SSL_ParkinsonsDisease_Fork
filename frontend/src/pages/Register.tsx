@@ -5,10 +5,11 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
-import { Loader2, Lock, Mail, Check, X} from 'lucide-react';
+import { Loader2, Check, X } from 'lucide-react';
 
 const Register = () => {
   const navigate = useNavigate();
+  const { toast } = useToast();
 
   //take all in as a string
   const [firstName, setFirstName] = useState(''); //combine to first and lat to make full name
@@ -26,9 +27,11 @@ const Register = () => {
     setIsLoading(true);
 
     try {
-        //simulates a api call, need to send to backend
-        await new Promise((resolve) => resolve(1));
-        navigate('/patients');
+        toast({
+          title: 'Registration not connected yet',
+          description: 'Backend account creation is not available in this demo yet. Use the demo login instead.',
+        });
+        navigate('/login');
     } catch (error) {
         console.error('Login failed', error);
     } finally {
@@ -79,7 +82,7 @@ const Register = () => {
       <Card className="w-full max-w-2xl">
         <CardHeader>
           <CardTitle>Sign Up</CardTitle>
-          <CardDescription>Enter your email and password</CardDescription>
+          <CardDescription>Registration is not connected to the backend yet. Use the demo login to continue.</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className = "space-y-4">

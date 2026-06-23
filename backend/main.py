@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import os
 import shutil
 import uvicorn
+from pydantic import BaseModel
 
 from routes.dtw_rest import router as dtw_router
 from routes.patient import router as patient_router
@@ -65,10 +66,59 @@ ACCESS_MIN = 30
 pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
+
+class CurrentUserResponse(BaseModel):
+    username: str
+    full_name: str
+    email: str | None = None
+    location: str
+    title: str
+    speciality: str
+
+
+def serialize_user(user: User) -> CurrentUserResponse:
+    return CurrentUserResponse(
+        username=user.username,
+        full_name=user.full_name,
+        email=user.email,
+        location=user.location,
+        title=user.title,
+        speciality=user.speciality,
+    )
+
+
+def ensure_demo_user() -> None:
+    demo_username = "doctor@hospital.com"
+    demo_password = "Demo123!"
+    with SessionLocal() as session:
+        existing = session.query(User).filter(
+            (User.username == demo_username) | (User.email == demo_username)
+        ).first()
+        if existing:
+            return
+
+        session.add(
+            User(
+                username=demo_username,
+                full_name="Demo Doctor",
+                email=demo_username,
+                hashed_password=pwd.hash(demo_password),
+                location="Demo Clinic",
+                title="Neurologist",
+                speciality="Movement Disorders",
+            )
+        )
+        session.commit()
+
+
+ensure_demo_user()
+
 def authenticate(username: str, password: str) -> User | None:
     try:
         with SessionLocal() as session:
-            user = session.query(User).filter_by(username=username).first()
+            user = session.query(User).filter(
+                (User.username == username) | (User.email == username)
+            ).first()
             if user and pwd.verify(password, user.hashed_password):
                 return user
     except Exception as e:
@@ -102,6 +152,11 @@ async def login(form: OAuth2PasswordRequestForm = Depends()):
         raise HTTPException(status_code=401, detail="Incorrect username or password")
     access_token = create_access_token(sub=user.username)
     return {"access_token": access_token, "token_type": "bearer"}
+
+
+@app.get("/me", response_model=CurrentUserResponse)
+async def read_current_user(current_user: User = Depends(get_current_user)):
+    return serialize_user(current_user)
 
 # ============ REST: Health & Patients ============
 @app.get("/")

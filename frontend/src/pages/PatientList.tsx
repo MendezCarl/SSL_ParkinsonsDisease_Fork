@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Upload, ArrowUpDown, CalendarClock, FileText, Loader2, Plus, Search, Stethoscope, User, UserPlus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -15,6 +15,7 @@ import { Patient, DoctorNoteEntry } from '@/types/patient';
 import apiService, { normalizeBirthDate } from '@/services/api';
 import { useApiStatus } from '@/hooks/use-api-status';
 import { getSeverityColor, calculateAge } from '@/lib/utils';
+import { useAuth } from '@/auth/auth-context';
 
 // Remove mock data - will be fetched from API
 
@@ -94,13 +95,17 @@ const PatientList = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const { toast } = useToast();
   const { isConnected, isChecking } = useApiStatus();
+  const { user } = useAuth();
 
-  // Mock user data - replace with actual user data from auth context
-  const [currentUser] = useState({
-    firstName: 'John',
-    lastName: 'Doe',
-    profileImage: '', // Add actual profile image URL if available
-  });
+  const currentUser = useMemo(() => {
+    const fullName = user?.fullName?.trim() || 'Demo Doctor';
+    const [firstName, ...rest] = fullName.split(' ');
+    return {
+      firstName: firstName || 'Demo',
+      lastName: rest.join(' ') || 'Doctor',
+      profileImage: '',
+    };
+  }, [user]);
 
   const getUserInitials = () => {
     return `${currentUser.firstName[0]}${currentUser.lastName[0]}`.toUpperCase();

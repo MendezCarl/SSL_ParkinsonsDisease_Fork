@@ -5,10 +5,13 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
-import { Loader2, Lock, Mail } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
+import { useAuth } from '@/auth/auth-context';
 
 const Login = () => {
   const navigate = useNavigate();
+  const { toast } = useToast();
+  const { login } = useAuth();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -19,11 +22,24 @@ const Login = () => {
     setIsLoading(true);
 
     try {
-        //simulates a api call, need to send to backend
-        await new Promise((resolve) => resolve(1));
+        const response = await login(email, password);
+        if (!response.success) {
+          toast({
+            title: 'Sign in failed',
+            description: response.error || 'Invalid credentials.',
+            variant: 'destructive',
+          });
+          return;
+        }
+
         navigate('/patients');
     } catch (error) {
         console.error('Login failed', error);
+        toast({
+          title: 'Sign in failed',
+          description: 'Unable to reach the backend.',
+          variant: 'destructive',
+        });
     } finally {
         setIsLoading(false);
     }
@@ -34,7 +50,7 @@ const Login = () => {
         <Card className="w-full max-w-2xl">
         <CardHeader>
           <CardTitle>Sign in</CardTitle>
-          <CardDescription>Enter your email and password</CardDescription>
+          <CardDescription>Enter your email and password. Demo login: `doctor@hospital.com` / `Demo123!`</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className='space-y-4'>

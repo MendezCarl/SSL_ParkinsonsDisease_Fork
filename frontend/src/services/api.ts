@@ -1,4 +1,5 @@
 import { AVAILABLE_TESTS, Patient, Test, TestIndicator, LabResultEntry, DoctorNoteEntry } from '@/types/patient';
+import { AuthUser, getStoredAuthToken } from '@/auth/auth-session';
 
 const API_BASE_URL = '/api'; // routed through Vite proxy (/api → backend root); works locally and in Docker
 
@@ -179,6 +180,11 @@ interface UploadVideoResponse {
   [key: string]: unknown;
 }
 
+interface LoginResponse {
+  access_token: string;
+  token_type: string;
+}
+
 interface BackendSeverityPrediction {
   predicted_updrs_stage: number;
   probabilities: Record<string, number>;
@@ -220,6 +226,11 @@ export interface PatientFormInput {
 }
 
 type PatientUpdateInput = Partial<Pick<Patient, 'firstName' | 'lastName' | 'birthDate' | 'height' | 'weight' | 'severity'>>;
+
+type AuthTokenPayload = {
+  accessToken: string;
+  tokenType: string;
+};
 
 const normalizeTestKey = (value?: string | null): string => {
   if (!value) return '';
@@ -527,10 +538,15 @@ class ApiService {
     try {
       const url = `${this.baseUrl}${endpoint}`;
       const isFormDataBody = options.body instanceof FormData;
+      const token = getStoredAuthToken();
       const headers: HeadersInit = isFormDataBody
-        ? { ...options.headers }
+        ? {
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            ...options.headers,
+          }
         : {
             "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
             ...options.headers,
           };
 
@@ -621,6 +637,59 @@ class ApiService {
 
   async getHealthStatus(): Promise<ApiResponse<HealthStatus>> {
     return this.request<HealthStatus>('/health');
+  }
+
+  async login(username: string, password: string): Promise<ApiResponse<AuthTokenPayload>> {
+    const formData = new URLSearchParams();
+    formData.set('username', username);
+    formData.set('password', password);
+
+    const response = await this.request<LoginResponse>('/token', {
+      method: 'POST',
+      body: formData.toString(),
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+    });
+
+    if (response.success && response.data) {
+      const tokenData = {
+        accessToken: response.data.access_token,
+        tokenType: response.data.token_type,
+      };
+      return { success: true, data: tokenData };
+    }
+
+    return { success: false, error: response.error };
+  }
+
+  async getCurrentUser(authToken?: string): Promise<ApiResponse<AuthUser>> {
+    const response = await this.request<{
+      username: string;
+      full_name: string;
+      email?: string | null;
+      location: string;
+      title: string;
+      speciality: string;
+    }>('/me', {
+      headers: authToken ? { Authorization: `Bearer ${authToken}` } : undefined,
+    });
+
+    if (response.success && response.data) {
+      return {
+        success: true,
+        data: {
+          username: response.data.username,
+          fullName: response.data.full_name,
+          email: response.data.email,
+          location: response.data.location,
+          title: response.data.title,
+          speciality: response.data.speciality,
+        },
+      };
+    }
+
+    return { success: false, error: response.error };
   }
 
   // Create new patient
