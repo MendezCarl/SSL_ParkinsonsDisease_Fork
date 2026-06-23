@@ -169,6 +169,22 @@ interface BackendPatientUpdate {
   doctors_notes_history?: BackendDoctorNoteEntry[];
 }
 
+interface BackendPatientMutationResult {
+  success: boolean;
+  patient_id: string;
+}
+
+interface HealthStatus {
+  status?: string;
+  [key: string]: unknown;
+}
+
+interface UploadVideoResponse {
+  filename?: string;
+  disk_path?: string;
+  [key: string]: unknown;
+}
+
 interface BackendSeverityPrediction {
   predicted_updrs_stage: number;
   probabilities: Record<string, number>;
@@ -500,12 +516,16 @@ class ApiService {
   ): Promise<ApiResponse<T>> {
     try {
       const url = `${this.baseUrl}${endpoint}`;
+      const isFormDataBody = options.body instanceof FormData;
+      const headers: HeadersInit = isFormDataBody
+        ? { ...options.headers }
+        : {
+            "Content-Type": "application/json",
+            ...options.headers,
+          };
 
       const response = await fetch(url, {
-        headers: {
-          "Content-Type": "application/json",
-          ...options.headers,
-        },
+        headers,
         ...options,
       });
 
@@ -587,6 +607,10 @@ class ApiService {
     }
 
     return { success: false, error: response.error };
+  }
+
+  async getHealthStatus(): Promise<ApiResponse<HealthStatus>> {
+    return this.request<HealthStatus>('/health');
   }
 
   // Create new patient
@@ -711,6 +735,26 @@ class ApiService {
     return response;
   }
 
+  async addPatientLabResult(
+    patientId: string,
+    entry: BackendLabResultEntry
+  ): Promise<ApiResponse<BackendPatientMutationResult>> {
+    return this.request<BackendPatientMutationResult>(`/patients/${patientId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ lab_results: entry }),
+    });
+  }
+
+  async addPatientDoctorNote(
+    patientId: string,
+    entry: BackendDoctorNoteEntry
+  ): Promise<ApiResponse<BackendPatientMutationResult>> {
+    return this.request<BackendPatientMutationResult>(`/patients/${patientId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ doctors_notes: entry }),
+    });
+  }
+
   // Delete patient
   async deletePatient(patientId: string): Promise<ApiResponse<boolean>> {
     return await this.request<boolean>(`/patients/${patientId}`, {
@@ -800,6 +844,13 @@ class ApiService {
       }
     );
     return response;
+  }
+
+  async uploadVideo(formData: FormData): Promise<ApiResponse<UploadVideoResponse>> {
+    return this.request<UploadVideoResponse>('/upload-video/', {
+      method: 'POST',
+      body: formData,
+    });
   }
 
   async predictAndUpdateSeverity(

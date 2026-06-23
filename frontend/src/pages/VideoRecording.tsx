@@ -527,12 +527,9 @@ const VideoRecording = () => {
         formData.append("video", blob, "recording.webm");
 
         try {
-          const resp = await fetch("/api/upload-video/", {
-            method: "POST",
-            body: formData,
-          });
-          if (resp.ok) {
-            const data = await resp.json();
+          const response = await apiService.uploadVideo(formData);
+          if (response.success && response.data) {
+            const data = response.data;
             const diskHint = data?.disk_path
               ? data.disk_path
               : data?.filename
@@ -547,7 +544,9 @@ const VideoRecording = () => {
                 `[VideoRecording] Saved video '${data.filename}' at '${diskHint || "(unknown path)"}'`
               );
             }
-          } else throw new Error("Upload failed");
+          } else {
+            throw new Error(response.error || "Upload failed");
+          }
         } catch (err) {
           console.error("Upload error:", err);
           toast({

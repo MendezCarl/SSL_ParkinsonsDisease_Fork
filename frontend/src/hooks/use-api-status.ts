@@ -8,9 +8,8 @@ export const useApiStatus = () => {
   const checkConnection = async () => {
     setIsChecking(true);
     try {
-      // First test the health endpoint
-      const healthResponse = await fetch('http://localhost:8000/health');
-      if (healthResponse.ok) {
+      const healthResponse = await apiService.getHealthStatus();
+      if (healthResponse.success) {
         const response = await apiService.getPatients(0, 1);
         setIsConnected(response.success);
       } else {

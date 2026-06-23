@@ -24,7 +24,7 @@ import {
   TestIndicator,
 } from "@/types/patient";
 import { getSeverityColor, calculateAge } from "@/lib/utils";
-import apiService, { mapSeverity } from "@/services/api";
+import apiService from "@/services/api";
 import {
   Dialog,
   DialogContent,
@@ -72,10 +72,6 @@ const testTypeStyles: Record<
 // ---------- Date helpers ----------
 const isValidDate = (d: unknown): d is Date =>
   d instanceof Date && !Number.isNaN(d.getTime());
-const asDate = (v: unknown): Date => {
-  const d = v instanceof Date ? v : new Date(v as any);
-  return isValidDate(d) ? d : new Date(); // or choose to return new Date(0) / null
-};
 const toISO = (v: unknown): string => {
   const d = v instanceof Date ? v : new Date(v as any);
   return isValidDate(d) ? d.toISOString() : new Date().toISOString();
@@ -146,10 +142,13 @@ const PatientDetails = () => {
   const handleAddLabResult = async () => {
     if (!patient || !newLabResult.trim()) return;
 
+    const resultText = newLabResult.trim();
+    const entryId = `lab_${Date.now()}`;
+
     const newEntry: LabResultEntry = {
-      id: `lab_${Date.now()}`,
+      id: entryId,
       date: new Date(),
-      results: newLabResult.trim(),
+      results: resultText,
       addedBy: "Current User", // In a real app, this would come from auth context
     };
 
@@ -165,20 +164,13 @@ const PatientDetails = () => {
     setIsLabResultModalOpen(false);
 
     try {
-      const res = await fetch(`http://localhost:8000/patients/${patient.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          lab_results: {
-            id: `lab_${Date.now()}`, // optional, or omit and let backend/DB assign
-            date: new Date().toISOString(),
-            added_by: "Unknown",
-            results: newLabResult.trim(), // <-- plain string, not { value: ... }
-          },
-        }),
+      const response = await apiService.addPatientLabResult(patient.id, {
+        id: entryId,
+        date: toISO(newEntry.date),
+        added_by: newEntry.addedBy ?? "Unknown",
+        results: resultText,
       });
-      const text = await res.text();
-      if (!res.ok) throw new Error(`Save failed ${res.status}: ${text}`);
+      if (!response.success) throw new Error(response.error || 'Failed to save lab result');
       toast({
         title: "Lab Result Added",
         description: "Recorded successfully.",
@@ -199,10 +191,13 @@ const PatientDetails = () => {
   const handleAddDoctorNote = async () => {
     if (!patient || !newDoctorNote.trim()) return;
 
+    const noteText = newDoctorNote.trim();
+    const entryId = `note_${Date.now()}`;
+
     const newEntry: DoctorNoteEntry = {
-      id: `note_${Date.now()}`,
+      id: entryId,
       date: new Date(),
-      note: newDoctorNote.trim(),
+      note: noteText,
       addedBy: "Current User",
     };
 
@@ -218,21 +213,13 @@ const PatientDetails = () => {
     setIsDoctorNoteModalOpen(false);
 
     try {
-      const res = await fetch(`http://localhost:8000/patients/${patient.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          doctors_notes: 
-            {
-              id: newEntry.id,
-              date: toISO(newEntry.date),
-              note: newEntry.note,
-              added_by: newEntry.addedBy ?? null,
-            }, 
-        }),
+      const response = await apiService.addPatientDoctorNote(patient.id, {
+        id: entryId,
+        date: toISO(newEntry.date),
+        note: noteText,
+        added_by: newEntry.addedBy ?? null,
       });
-      const text = await res.text();
-      if (!res.ok) throw new Error(`Save failed ${res.status}: ${text}`);
+      if (!response.success) throw new Error(response.error || 'Failed to save doctor note');
       toast({ title: "Note Added", description: "Recorded successfully." });
     } catch (e) {
       console.error("Error saving doctor note:", e);
@@ -248,74 +235,19 @@ const PatientDetails = () => {
 
   useEffect(() => {
     const fetchPatient = async () => {
-      try {
-        const response = await fetch(`http://localhost:8000/patients/${id}`);
-        const data = await response.json();
+      if (!id) {
+        setError("Patient ID is missing");
+        setLoading(false);
+        return;
+      }
 
-        if (!response.ok) {
-          throw new Error(data.detail || "Failed to fetch patient");
+      try {
+        const response = await apiService.getPatient(id);
+        if (!response.success || !response.data) {
+          throw new Error(response.error || 'Failed to fetch patient');
         }
 
-        const notesHist = data.doctors_notes_history || [];
-        const labsHist = (data.lab_results_history || []).map(
-          (e: any, i: number) => ({
-            id: e.id ?? `lab_${i}`,
-            date: asDate(e.date),
-            results: e.results ?? "",
-            addedBy: e.added_by ?? undefined,
-          })
-        );
-        // Debug logging
-        console.log("API Response:", data);
-        console.log("Patient data:", data);
-        console.log("Lab results history:", data?.lab_results_history);
-        console.log("Doctor notes history:", data?.doctors_notes_history);
-
-        const [firstName, lastName] = data.name.split(" ");
-
-        const labResultsHistory = (data.lab_results_history || []).map(
-          (entry: any) => ({
-            id: entry.id,
-            date: new Date(entry.date),
-            results: entry.results,
-            addedBy: entry.added_by,
-          })
-        );
-
-        const doctorNotesHistory = (data.doctors_notes_history || []).map(
-          (entry: any) => ({
-            id: entry.id,
-            date: new Date(entry.date),
-            note: entry.note,
-            addedBy: entry.added_by,
-          })
-        );
-
-        const latestLabResult =
-          data.latest_lab_result ||
-          data.patient.lab_results_history?.[0] ||
-          null;
-        const latestDoctorNote =
-          data.latest_doctor_note ||
-          data.patient.doctors_notes_history?.[0] ||
-          null;
-
-        setPatient({
-          id: data.patient_id,
-          firstName: firstName,
-          lastName: lastName,
-          recordNumber: data.patient_id, // Use patient_id as record number
-          birthDate: data.birthDate,
-          height: `${data.height}`,
-          weight: `${data.weight}`,
-          labResults: latestLabResult?.results || "",
-          doctorNotes: latestDoctorNote?.note || "",
-          labResultsHistory,
-          doctorNotesHistory,
-          severity: mapSeverity(data.severity),
-          createdAt: new Date(), // Optional: replace with actual timestamps
-          updatedAt: new Date(),
-        });
+        setPatient(response.data);
 
         setTests([]);
       } catch (err: any) {
