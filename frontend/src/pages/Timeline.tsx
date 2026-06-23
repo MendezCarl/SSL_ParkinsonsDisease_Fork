@@ -237,7 +237,7 @@ export default function Timeline() {
         <div className="text-center">
           <h2 className="text-2xl font-bold mb-4">Patient not found</h2>
           <Button asChild>
-            <Link to="/patients/">Back to Patients</Link>
+            <Link to="/patients">Back to Patients</Link>
           </Button>
         </div>
       </div>

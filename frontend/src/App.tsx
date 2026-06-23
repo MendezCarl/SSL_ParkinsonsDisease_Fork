@@ -26,12 +26,15 @@ const App = () => (
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<PatientList />} />
+          <Route path="/patients" element={<PatientList />} />
           <Route path="/patient/:id" element={<PatientDetails />} />
           <Route path="/patient-form" element={<PatientForm />} />
           <Route path="/patient-form/:id" element={<PatientForm />} />
           <Route path="/patient/:id/test-selection" element={<TestSelection />} />
           <Route path="/patient/:id/video-recording/:testId" element={<VideoRecording />} />
+          <Route path="/patient/:id/video-summary" element={<VideoSummary />} />
           <Route path="/patient/:id/video-summary/:testId" element={<VideoSummary />} />
+          <Route path="/patients/:id/video-summary/:testId" element={<VideoSummary />} />
           <Route path="/patients/:patientId/timeline" element={<Timeline />} />
           <Route path="/login" element={<Login />}/>
           <Route path="/register" element={<Register />}/>
