@@ -63,8 +63,6 @@ class PatientUpdate(BaseModel):
     birthDate: Optional[date] = None
     height: Optional[Union[float, str]] = None
     weight: Optional[Union[float, str]] = None
-    lab_results: Optional[LabResultIn] = None
-    doctors_notes: Optional[DoctorNoteIn] = None
     severity: Optional[str] = None
 
     @field_validator("height", "weight", mode="before")
@@ -109,3 +107,8 @@ class FilterCriteria(BaseModel):
     min_age: Optional[int] = None
     max_age: Optional[int] = None
     severity: Optional[str] 
+
+
+class PatientMutationResponse(BaseModel):
+    success: bool
+    patient_id: str

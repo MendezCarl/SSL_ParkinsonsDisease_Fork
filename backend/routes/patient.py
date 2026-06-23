@@ -10,14 +10,15 @@ from patient_manager import (
     async_create_patient, async_get_patient_info,
     async_update_patient_info, async_delete_patient_record,
     async_get_all_patients_info, async_search_patients,
-    async_filter_patients,
+    async_filter_patients, async_add_patient_lab_result,
+    async_add_patient_doctor_note,
 )
 
 from routes.contracts import (
-    PatientCreate, PatientUpdate,
+    PatientCreate, PatientUpdate, LabResultIn, DoctorNoteIn,
     PatientResponse, PatientsListResponse,
     PatientSearchResponse, FilterCriteria,
-    LabResultOut, DoctorNoteOut
+    PatientMutationResponse,
 )
 
 _num = re.compile(r"(\d+\.?\d*)")
@@ -27,7 +28,7 @@ _num = re.compile(r"(\d+\.?\d*)")
 router = APIRouter(prefix="/patients")
 
 
-@router.post("/", response_model=Dict)
+@router.post("/", response_model=PatientMutationResponse)
 async def create_patient(patient: PatientCreate):
     result = await async_create_patient(
         name=patient.name,
@@ -61,13 +62,29 @@ async def get_patient(patient_id: str):
         raise HTTPException(status_code=404, detail="Patient not found")
     return result["patient"]
 
-@router.put("/{patient_id}", response_model=Dict)
+@router.put("/{patient_id}", response_model=PatientMutationResponse)
 async def update_patient(patient_id: str, patient_update: PatientUpdate):
     result = await async_update_patient_info(patient_id, patient_update)
     if not result.get("success"):
         if "errors" in result:
             raise HTTPException(status_code=400, detail=result["errors"])
         raise HTTPException(status_code=404, detail=result.get("error", "Failed to update patient"))
+    return result
+
+
+@router.post("/{patient_id}/lab-results", response_model=PatientMutationResponse)
+async def add_lab_result(patient_id: str, lab_result: LabResultIn):
+    result = await async_add_patient_lab_result(patient_id, lab_result)
+    if not result.get("success"):
+        raise HTTPException(status_code=404, detail=result.get("error", "Failed to add lab result"))
+    return result
+
+
+@router.post("/{patient_id}/doctor-notes", response_model=PatientMutationResponse)
+async def add_doctor_note(patient_id: str, doctor_note: DoctorNoteIn):
+    result = await async_add_patient_doctor_note(patient_id, doctor_note)
+    if not result.get("success"):
+        raise HTTPException(status_code=404, detail=result.get("error", "Failed to add doctor note"))
     return result
 
 @router.delete("/{patient_id}", response_model=Dict)

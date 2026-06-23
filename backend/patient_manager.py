@@ -26,7 +26,7 @@ from routes.contracts import (
     PatientCreate, PatientUpdate,
     PatientResponse, PatientsListResponse,
     PatientSearchResponse, FilterCriteria,
-    LabResultOut, DoctorNoteOut
+    LabResultOut, DoctorNoteOut, LabResultIn, DoctorNoteIn
 )
 
 # ----------------- DB bootstrap -----------------
@@ -56,6 +56,10 @@ def _parse_number(value, lo: float, hi: float) -> Optional[float]:
 def _gen_patient_id(name: str) -> str:
     base = (name or "").lower().replace(" ", "")[:5] or "pt"
     return f"{base}{int(datetime.now().timestamp())}"
+
+
+def _gen_entry_id(prefix: str) -> str:
+    return f"{prefix}_{uuid4().hex}"
 
 def _validate(data: Dict[str, Any]) -> Dict[str, str]:
     errors: Dict[str, str] = {}
@@ -308,28 +312,41 @@ def update_patient_info(patient_id: str, updated_data: PatientUpdate) -> Dict[st
         if "severity" in data:
             dbp.severity = data["severity"]
 
-        # --- New visit-scoped fields ---
-        if updated_data.lab_results is not None:
-            lab_input = updated_data.lab_results
-            prepo.add_lab_result(
-                lab_id= lab_input.id,
-                patient_id=patient_id,
-                result_date=lab_input.date or datetime.now(),
-                results=lab_input.results or "",
-                added_by=lab_input.added_by or "system",
-            )
-
-        if updated_data.doctors_notes is not None:
-            note_input = updated_data.doctors_notes
-            prepo.add_doctor_note(
-                note_id=note_input.id,
-                patient_id=patient_id,
-                note_date=note_input.date or datetime.now(),
-                note=note_input.note or "",
-                added_by=note_input.added_by or "system",
-            )
-
         session.commit()
+        return {"success": True, "patient_id": patient_id}
+
+
+def add_patient_lab_result(patient_id: str, lab_result: LabResultIn) -> Dict[str, Any]:
+    with SessionLocal() as session:
+        prepo = PatientRepository(session)
+        dbp = prepo.get(patient_id)
+        if not dbp:
+            return {"success": False, "error": "Patient not found"}
+
+        prepo.add_lab_result(
+            lab_id=lab_result.id or _gen_entry_id("lab"),
+            patient_id=patient_id,
+            result_date=lab_result.date or datetime.now(),
+            results=lab_result.results or "",
+            added_by=lab_result.added_by or "system",
+        )
+        return {"success": True, "patient_id": patient_id}
+
+
+def add_patient_doctor_note(patient_id: str, doctor_note: DoctorNoteIn) -> Dict[str, Any]:
+    with SessionLocal() as session:
+        prepo = PatientRepository(session)
+        dbp = prepo.get(patient_id)
+        if not dbp:
+            return {"success": False, "error": "Patient not found"}
+
+        prepo.add_doctor_note(
+            note_id=doctor_note.id or _gen_entry_id("note"),
+            patient_id=patient_id,
+            note_date=doctor_note.date or datetime.now(),
+            note=doctor_note.note or "",
+            added_by=doctor_note.added_by or "system",
+        )
         return {"success": True, "patient_id": patient_id}
 
 def delete_patient_record(patient_id: str) -> Dict[str, Any]:
@@ -393,6 +410,16 @@ async def async_get_all_patients_info(skip: int = 0, limit: int = 100) -> Dict[s
 async def async_update_patient_info(patient_id: str, updated_data: PatientUpdate) -> Dict[str, Any]:
     async with _async_lock:
         return update_patient_info(patient_id, updated_data)
+
+
+async def async_add_patient_lab_result(patient_id: str, lab_result: LabResultIn) -> Dict[str, Any]:
+    async with _async_lock:
+        return add_patient_lab_result(patient_id, lab_result)
+
+
+async def async_add_patient_doctor_note(patient_id: str, doctor_note: DoctorNoteIn) -> Dict[str, Any]:
+    async with _async_lock:
+        return add_patient_doctor_note(patient_id, doctor_note)
 
 async def async_delete_patient_record(patient_id: str) -> Dict[str, Any]:
     async with _async_lock:

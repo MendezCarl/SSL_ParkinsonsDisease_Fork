@@ -1,4 +1,4 @@
-import { AVAILABLE_TESTS, Test, TestIndicator } from '@/types/patient';
+import { AVAILABLE_TESTS, Patient, Test, TestIndicator, LabResultEntry, DoctorNoteEntry } from '@/types/patient';
 
 const API_BASE_URL = '/api'; // routed through Vite proxy (/api → backend root); works locally and in Docker
 
@@ -98,9 +98,9 @@ interface BackendPatient {
   patient_id: string;
   name: string;
   birthDate: string;
-  age: number;
-  height: number;
-  weight: number;
+  age?: number;
+  height?: number | string | null;
+  weight?: number | string | null;
   severity: string;
   lab_results_history?: BackendLabResultEntry[];
   doctors_notes_history?: BackendDoctorNoteEntry[];
@@ -150,8 +150,6 @@ interface BackendPatientCreate {
   birthDate: string;
   height: string;
   weight: string;
-  lab_results?: string;
-  doctors_notes?: string;
   severity: string;
   lab_results_history?: BackendLabResultEntry[];
   doctors_notes_history?: BackendDoctorNoteEntry[];
@@ -159,14 +157,10 @@ interface BackendPatientCreate {
 
 interface BackendPatientUpdate {
   name?: string;
-  age?: number;
   birthDate?: string;
-  // age?: number;
   height?: string;
   weight?: string;
   severity?: string;
-  lab_results_history?: BackendLabResultEntry[];
-  doctors_notes_history?: BackendDoctorNoteEntry[];
 }
 
 interface BackendPatientMutationResult {
@@ -210,6 +204,22 @@ interface ApiResponse<T> {
   data?: T;
   error?: string;
 }
+
+export interface PatientFormInput {
+  firstName: string;
+  lastName: string;
+  recordNumber: string;
+  birthDate: string;
+  height: string;
+  weight: string;
+  labResults: string;
+  doctorNotes: string;
+  severity: Patient['severity'];
+  createdAt?: Date;
+  updatedAt?: Date;
+}
+
+type PatientUpdateInput = Partial<Pick<Patient, 'firstName' | 'lastName' | 'birthDate' | 'height' | 'weight' | 'severity'>>;
 
 const normalizeTestKey = (value?: string | null): string => {
   if (!value) return '';
@@ -329,7 +339,7 @@ const convertBackendTestToFrontend = (patientId: string, entry: BackendTestEntry
 };
 
 // Convert backend patient to frontend patient
-const convertBackendToFrontend = (backendPatient: BackendPatient) => {
+const convertBackendToFrontend = (backendPatient: BackendPatient): Patient => {
   // Handle undefined or null name
   const name = backendPatient.name || '';
   const nameParts = name.split(' ');
@@ -403,7 +413,7 @@ const convertBackendToFrontend = (backendPatient: BackendPatient) => {
 };
 
 // Convert frontend patient to backend format
-const convertFrontendToBackend = (frontendPatient: any): BackendPatientCreate => {
+const convertFrontendToBackend = (frontendPatient: PatientFormInput): BackendPatientCreate => {
   const fullName = `${frontendPatient.firstName || ''} ${frontendPatient.lastName || ''}`.trim();
   
   const heightStr = (frontendPatient.height || '').replace(/[^\d.]/g, '');
@@ -416,14 +426,14 @@ const convertFrontendToBackend = (frontendPatient: any): BackendPatientCreate =>
     return Number.isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
   };
 
-  const labResultsHistory: BackendLabResultEntry[] = (frontendPatient.labResultsHistory || []).map((entry: any) => ({
+  const labResultsHistory: BackendLabResultEntry[] = ((frontendPatient as Patient).labResultsHistory || []).map((entry: LabResultEntry) => ({
     id: entry.id,
     date: ensureISODate(entry.date),
     results: entry.results,
     added_by: entry.addedBy,
   }));
 
-  const doctorNotesHistory: BackendDoctorNoteEntry[] = (frontendPatient.doctorNotesHistory || []).map((entry: any) => ({
+  const doctorNotesHistory: BackendDoctorNoteEntry[] = ((frontendPatient as Patient).doctorNotesHistory || []).map((entry: DoctorNoteEntry) => ({
     id: entry.id,
     date: ensureISODate(entry.date),
     note: entry.note,
@@ -576,7 +586,7 @@ class ApiService {
   async getPatients(
     skip: number = 0,
     limit: number = 100
-  ): Promise<ApiResponse<any[]>> {
+  ): Promise<ApiResponse<Patient[]>> {
     const response = await this.request<{
       patients: BackendPatient[];
       total: number;
@@ -593,7 +603,7 @@ class ApiService {
   }
 
   // Get single patient
-  async getPatient(patientId: string): Promise<ApiResponse<any>> {
+  async getPatient(patientId: string): Promise<ApiResponse<Patient>> {
     const response = await this.request<
       { patient: BackendPatient } | BackendPatient
     >(`/patients/${patientId}`);
@@ -614,27 +624,26 @@ class ApiService {
   }
 
   // Create new patient
-  async createPatient(patientData: any): Promise<ApiResponse<any>> {
+  async createPatient(patientData: PatientFormInput): Promise<ApiResponse<Patient>> {
     const backendData = convertFrontendToBackend(patientData);
 
-    const response = await this.request<BackendPatient>("/patients/", {
+    const response = await this.request<BackendPatientMutationResult>("/patients/", {
       method: "POST",
       body: JSON.stringify(backendData),
     });
 
     if (response.success && response.data) {
-      const convertedPatient = convertBackendToFrontend(response.data);
-      return { success: true, data: convertedPatient };
+      return this.getPatient(response.data.patient_id);
     }
 
-    return response;
+    return { success: false, error: response.error };
   }
 
   // Update patient
   async updatePatient(
     patientId: string,
-    updateData: any
-  ): Promise<ApiResponse<any>> {
+    updateData: PatientUpdateInput
+  ): Promise<ApiResponse<Patient>> {
     const backendData: BackendPatientUpdate = {};
 
     console.log("Update patient input data:", updateData);
@@ -649,7 +658,6 @@ class ApiService {
     if (updateData.birthDate !== undefined) {
       const normalized = normalizeBirthDate(updateData.birthDate);
       backendData.birthDate = normalized || updateData.birthDate;
-      backendData.age = calculateAge(normalized || updateData.birthDate); // Use your existing function
     }
     
     if (updateData.height) {
@@ -659,43 +667,6 @@ class ApiService {
     if (updateData.weight) {
       const weightStr = updateData.weight.replace(/[^\d.]/g, "");
       backendData.weight = weightStr || "0";
-    }
-    const ensureISODate = (value: any): string => {
-      if (value instanceof Date) return value.toISOString();
-      const parsed = new Date(value);
-      return Number.isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
-    };
-
-    if (updateData.labResultsHistory) {
-      backendData.lab_results_history = updateData.labResultsHistory.map((entry: any) => ({
-        id: entry.id,
-        date: ensureISODate(entry.date),
-        results: entry.results,
-        added_by: entry.addedBy,
-      }));
-    } else if (typeof updateData.labResults === 'string' && updateData.labResults.trim()) {
-      backendData.lab_results_history = [{
-        id: `lab_${Date.now()}`,
-        date: new Date().toISOString(),
-        results: updateData.labResults.trim(),
-        added_by: updateData.primaryPhysician || 'Unknown',
-      }];
-    }
-
-    if (updateData.doctorNotesHistory) {
-      backendData.doctors_notes_history = updateData.doctorNotesHistory.map((entry: any) => ({
-        id: entry.id,
-        date: ensureISODate(entry.date),
-        note: entry.note,
-        added_by: entry.addedBy,
-      }));
-    } else if (typeof updateData.doctorNotes === 'string' && updateData.doctorNotes.trim()) {
-      backendData.doctors_notes_history = [{
-        id: `note_${Date.now()}`,
-        date: new Date().toISOString(),
-        note: updateData.doctorNotes.trim(),
-        added_by: updateData.primaryPhysician || 'Unknown',
-      }];
     }
     if (updateData.severity) {
       const mappedSeverity = updateData.severity;
@@ -719,7 +690,7 @@ class ApiService {
 
 
 
-    const response = await this.request<BackendPatient>(
+    const response = await this.request<BackendPatientMutationResult>(
       `/patients/${patientId}`,
       {
         method: "PUT",
@@ -728,20 +699,19 @@ class ApiService {
     );
 
     if (response.success && response.data) {
-      const convertedPatient = convertBackendToFrontend(response.data);
-      return { success: true, data: convertedPatient };
+      return this.getPatient(response.data.patient_id);
     }
 
-    return response;
+    return { success: false, error: response.error };
   }
 
   async addPatientLabResult(
     patientId: string,
     entry: BackendLabResultEntry
   ): Promise<ApiResponse<BackendPatientMutationResult>> {
-    return this.request<BackendPatientMutationResult>(`/patients/${patientId}`, {
-      method: 'PUT',
-      body: JSON.stringify({ lab_results: entry }),
+    return this.request<BackendPatientMutationResult>(`/patients/${patientId}/lab-results`, {
+      method: 'POST',
+      body: JSON.stringify(entry),
     });
   }
 
@@ -749,9 +719,9 @@ class ApiService {
     patientId: string,
     entry: BackendDoctorNoteEntry
   ): Promise<ApiResponse<BackendPatientMutationResult>> {
-    return this.request<BackendPatientMutationResult>(`/patients/${patientId}`, {
-      method: 'PUT',
-      body: JSON.stringify({ doctors_notes: entry }),
+    return this.request<BackendPatientMutationResult>(`/patients/${patientId}/doctor-notes`, {
+      method: 'POST',
+      body: JSON.stringify(entry),
     });
   }
 

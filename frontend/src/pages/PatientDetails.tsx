@@ -155,6 +155,7 @@ const PatientDetails = () => {
     const prev = patient;
     const updated = {
       ...patient,
+      labResults: resultText,
       labResultsHistory: [...(patient.labResultsHistory ?? []), newEntry],
     };
 
@@ -204,6 +205,7 @@ const PatientDetails = () => {
     const prev = patient;
     const updated = {
       ...patient,
+      doctorNotes: noteText,
       doctorNotesHistory: [...(patient.doctorNotesHistory ?? []), newEntry],
     };
 
