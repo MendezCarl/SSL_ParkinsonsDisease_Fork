@@ -76,7 +76,7 @@ SECRET_KEY = "stupid_hash_for_now"
 ALGO = "HS256"
 ACCESS_MIN = 30
 
-pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
+pwd = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 
