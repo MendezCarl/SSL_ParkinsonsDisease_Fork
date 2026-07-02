@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException, Query, UploadFile, File, Form, Body,
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from typing import Any, Dict, List, Optional, Annotated
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import os
 import shutil
 import uvicorn
@@ -244,7 +244,7 @@ def authenticate(username: str, password: str) -> User | None:
 def create_access_token(sub: str) -> str:
     to_encode = {
         "sub": sub, 
-        "exp": datetime.now() + timedelta(minutes=ACCESS_MIN)
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=ACCESS_MIN)
     }
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGO)
 
