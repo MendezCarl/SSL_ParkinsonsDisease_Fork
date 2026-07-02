@@ -1,12 +1,12 @@
 from fastapi import FastAPI, HTTPException, Query, UploadFile, File, Form, Body, WebSocket, WebSocketDisconnect, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from typing import Dict, List, Optional, Annotated
+from typing import Any, Dict, List, Optional, Annotated
 from datetime import datetime, timedelta
 import os
 import shutil
 import uvicorn
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from routes.dtw_rest import router as dtw_router
 from routes.patient import router as patient_router
@@ -31,7 +31,20 @@ from patient_manager import (
     TestHistoryManager
 )
 
-app = FastAPI(title="Patient Management API")
+app = FastAPI(
+    title="Patient Management API",
+    version="0.1.0",
+    description=(
+        "Backend API for the Parkinson's demo application. Swagger UI is available at `/docs` "
+        "and the raw OpenAPI schema is available at `/openapi.json`."
+    ),
+    openapi_tags=[
+        {"name": "auth", "description": "Authentication and current-user endpoints."},
+        {"name": "system", "description": "Health and diagnostic endpoints."},
+        {"name": "test-history", "description": "Patient test history storage and retrieval."},
+        {"name": "recordings", "description": "Uploaded and generated recording assets."},
+    ],
+)
 app.include_router(dtw_router)
 app.include_router(patient_router)
 app.include_router(ws_router)
@@ -76,6 +89,82 @@ class CurrentUserResponse(BaseModel):
     speciality: str
 
 
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str
+
+
+class RootResponse(BaseModel):
+    message: str
+
+
+class HealthResponse(BaseModel):
+    status: str
+    message: str
+
+
+class DtwMetricsSnapshot(BaseModel):
+    session_id: str | None = None
+    distance: float | None = None
+    avg_step_cost: float | None = None
+    similarity: float | None = None
+
+
+class PatientTestHistoryEntry(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "test_name": "finger-tapping",
+                "date": "2026-07-02T19:20:30Z",
+                "recording_file": "patient123_finger-tapping_2026-07-02_19-20-30.mov",
+                "frame_count": 312,
+                "fps": 30,
+                "summary_available": True,
+                "dtw": {
+                    "session_id": "test-1776797714156",
+                    "distance": 12.4,
+                    "avg_step_cost": 0.21,
+                    "similarity": 0.87,
+                },
+            }
+        }
+    )
+
+    test_id: str | None = None
+    test_name: str = Field(..., description="Canonical frontend/backend test name.")
+    date: str = Field(..., description="UTC ISO-8601 timestamp.")
+    recording_file: str | None = None
+    frame_count: int | None = None
+    fps: int | None = None
+    summary_available: bool | None = None
+    dtw: DtwMetricsSnapshot | None = None
+    extra: Dict[str, Any] = Field(default_factory=dict, description="Additional stored metadata for the test record.")
+
+
+class PatientTestHistoryResponse(BaseModel):
+    success: bool
+    tests: List[PatientTestHistoryEntry]
+
+
+class SimpleSuccessResponse(BaseModel):
+    success: bool
+
+
+class UploadVideoResponse(BaseModel):
+    success: bool
+    filename: str | None = None
+    path: str | None = None
+    patient_id: str | None = None
+    test_name: str | None = None
+    error: str | None = None
+
+
+class VideoListResponse(BaseModel):
+    success: bool
+    videos: List[str] = Field(default_factory=list)
+    error: str | None = None
+
+
 def serialize_user(user: User) -> CurrentUserResponse:
     return CurrentUserResponse(
         username=user.username,
@@ -87,28 +176,56 @@ def serialize_user(user: User) -> CurrentUserResponse:
     )
 
 
+def normalize_test_history_entry(raw: Dict[str, Any]) -> PatientTestHistoryEntry:
+    known_fields = {
+        "test_id",
+        "test_name",
+        "date",
+        "recording_file",
+        "frame_count",
+        "fps",
+        "summary_available",
+        "dtw",
+    }
+    return PatientTestHistoryEntry(
+        test_id=raw.get("test_id"),
+        test_name=str(raw.get("test_name") or "unknown"),
+        date=str(raw.get("date") or datetime.utcnow().isoformat()),
+        recording_file=raw.get("recording_file"),
+        frame_count=raw.get("frame_count"),
+        fps=raw.get("fps"),
+        summary_available=raw.get("summary_available"),
+        dtw=raw.get("dtw"),
+        extra={k: v for k, v in raw.items() if k not in known_fields},
+    )
+
+
 def ensure_demo_user() -> None:
     demo_username = "doctor@hospital.com"
     demo_password = "Demo123!"
-    with SessionLocal() as session:
-        existing = session.query(User).filter(
-            (User.username == demo_username) | (User.email == demo_username)
-        ).first()
-        if existing:
-            return
+    try:
+        with SessionLocal() as session:
+            existing = session.query(User).filter(
+                (User.username == demo_username) | (User.email == demo_username)
+            ).first()
+            if existing:
+                return
 
-        session.add(
-            User(
-                username=demo_username,
-                full_name="Demo Doctor",
-                email=demo_username,
-                hashed_password=pwd.hash(demo_password),
-                location="Demo Clinic",
-                title="Neurologist",
-                speciality="Movement Disorders",
+            session.add(
+                User(
+                    username=demo_username,
+                    full_name="Demo Doctor",
+                    email=demo_username,
+                    hashed_password=pwd.hash(demo_password),
+                    location="Demo Clinic",
+                    title="Neurologist",
+                    speciality="Movement Disorders",
+                )
             )
-        )
-        session.commit()
+            session.commit()
+    except Exception:
+        # Keep app importable for docs/OpenAPI even when the optional bcrypt backend is unavailable.
+        return
 
 
 ensure_demo_user()
@@ -145,7 +262,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
             raise HTTPException(status_code=401, detail="Invalid authentication credentials")
         return user
     
-@app.post("/token")
+@app.post("/token", response_model=TokenResponse, tags=["auth"], summary="Create a bearer token")
 async def login(form: OAuth2PasswordRequestForm = Depends()):
     user = authenticate(form.username, form.password)
     if not user:
@@ -154,37 +271,55 @@ async def login(form: OAuth2PasswordRequestForm = Depends()):
     return {"access_token": access_token, "token_type": "bearer"}
 
 
-@app.get("/me", response_model=CurrentUserResponse)
+@app.get("/me", response_model=CurrentUserResponse, tags=["auth"], summary="Get the current authenticated user")
 async def read_current_user(current_user: User = Depends(get_current_user)):
     return serialize_user(current_user)
 
 # ============ REST: Health & Patients ============
-@app.get("/")
+@app.get("/", response_model=RootResponse, tags=["system"], summary="API root")
 async def root():
     return {"message": "Welcome to the Patient Management API"}
 
-@app.get("/health")
+@app.get("/health", response_model=HealthResponse, tags=["system"], summary="Health check")
 async def health_check():
     return {"status": "healthy", "message": "API is running"}
 
 # ============ REST: Test History ============
-@app.get("/patients/{patient_id}/tests", response_model=Dict)
+@app.get(
+    "/patients/{patient_id}/tests",
+    response_model=PatientTestHistoryResponse,
+    tags=["test-history"],
+    summary="Get stored test history for a patient",
+)
 async def get_patient_tests(patient_id: str):
     thm = TestHistoryManager()
     tests = thm.get_patient_tests(patient_id)
-    return {"success": True, "tests": tests}
+    return {"success": True, "tests": [normalize_test_history_entry(test) for test in tests]}
 
-@app.post("/patients/{patient_id}/tests", response_model=Dict)
-async def add_patient_test(patient_id: str, test_data: dict = Body(...)):
+@app.post(
+    "/patients/{patient_id}/tests",
+    response_model=SimpleSuccessResponse,
+    tags=["test-history"],
+    summary="Add a test history record for a patient",
+)
+async def add_patient_test(patient_id: str, test_data: PatientTestHistoryEntry = Body(...)):
     thm = TestHistoryManager()
-    thm.add_patient_test(patient_id, test_data)
+    payload = test_data.model_dump(exclude_none=True)
+    if payload.get("extra"):
+        payload.update(payload.pop("extra"))
+    thm.add_patient_test(patient_id, payload)
     return {"success": True}
 
 
 
 # ============ REST: Recordings ============
 # ============ REST: Recordings ============
-@app.post("/upload-video/")
+@app.post(
+    "/upload-video/",
+    response_model=UploadVideoResponse,
+    tags=["recordings"],
+    summary="Upload a processed video recording",
+)
 async def upload_video(
     patient_id: str = Form(...),
     test_name: str = Form(...),
@@ -208,7 +343,12 @@ async def upload_video(
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-@app.get("/videos/{patient_id}/{test_name}", response_model=Dict)
+@app.get(
+    "/videos/{patient_id}/{test_name}",
+    response_model=VideoListResponse,
+    tags=["recordings"],
+    summary="List saved recordings for a patient and test",
+)
 def list_videos(patient_id: str, test_name: str):
     try:
         files = os.listdir(RECORDINGS_DIR)

@@ -7,6 +7,18 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class LSTMCNNPredictRequest(BaseModel):
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "sequence": [
+                    [0.12, 0.44, 0.0, 0.18, 0.39, 0.0, 0.25, 0.35, 0.0, 0.31, 0.29, 0.0, 0.42, 0.21, 0.0, 0.49, 0.18, 0.0, 0.54, 0.14, 0.0, 0.61, 0.11, 0.0],
+                    [0.11, 0.43, 0.0, 0.19, 0.38, 0.0, 0.24, 0.34, 0.0, 0.32, 0.28, 0.0, 0.41, 0.20, 0.0, 0.5, 0.17, 0.0, 0.55, 0.13, 0.0, 0.62, 0.1, 0.0],
+                    [0.1, 0.42, 0.0, 0.2, 0.37, 0.0, 0.23, 0.33, 0.0, 0.33, 0.27, 0.0, 0.4, 0.19, 0.0, 0.51, 0.16, 0.0, 0.56, 0.12, 0.0, 0.63, 0.09, 0.0]
+                ],
+                "return_attention": False,
+            }
+        }
+    }
     sequence: list[list[float]] = Field(
         ...,
         description="Input sequence with shape (T, 24).",

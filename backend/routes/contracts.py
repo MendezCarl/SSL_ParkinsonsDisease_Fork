@@ -8,6 +8,16 @@ from pydantic import ConfigDict  # v2
 _num = re.compile(r"(\d+\.?\d*)")
 
 class LabResultIn(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "id": "lab_20260702_001",
+                "date": "2026-07-02T19:20:30Z",
+                "results": "UPDRS motor score trending down from prior visit.",
+                "added_by": "Dr. Demo",
+            }
+        }
+    )
     id: Optional[str] = None
     date: Optional[datetime] = None
     results: Optional[str] = None
@@ -15,6 +25,16 @@ class LabResultIn(BaseModel):
 
 
 class DoctorNoteIn(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "id": "note_20260702_001",
+                "date": "2026-07-02T19:30:00Z",
+                "note": "Patient tolerated finger-tapping test well. Mild bradykinesia persists.",
+                "added_by": "Dr. Demo",
+            }
+        }
+    )
     id: Optional[str] = None
     date: Optional[datetime] = None
     note: str = ""
@@ -37,6 +57,34 @@ class DoctorNoteOut(BaseModel):
     added_by: Optional[str] = None
 
 class PatientCreate(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "name": "Jane Smith",
+                "age": 68,
+                "birthDate": "1958-04-12",
+                "height": 165,
+                "weight": 61,
+                "severity": "Stage 2",
+                "lab_results_history": [
+                    {
+                        "id": "lab_20260702_001",
+                        "date": "2026-07-02T19:20:30Z",
+                        "results": "Baseline labs within normal range.",
+                        "added_by": "Dr. Demo",
+                    }
+                ],
+                "doctors_notes_history": [
+                    {
+                        "id": "note_20260702_001",
+                        "date": "2026-07-02T19:30:00Z",
+                        "note": "Initial consult complete.",
+                        "added_by": "Dr. Demo",
+                    }
+                ],
+            }
+        }
+    )
     name: str
     age: int
     birthDate: date
@@ -59,6 +107,17 @@ class PatientCreate(BaseModel):
     
 
 class PatientUpdate(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "name": "Jane Smith",
+                "birthDate": "1958-04-12",
+                "height": 166,
+                "weight": 60,
+                "severity": "Stage 3",
+            }
+        }
+    )
     name: Optional[str] = None
     birthDate: Optional[date] = None
     height: Optional[Union[float, str]] = None
@@ -103,6 +162,15 @@ class PatientSearchResponse(BaseModel):
     count: int
 
 class FilterCriteria(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "min_age": 55,
+                "max_age": 80,
+                "severity": "Stage 3",
+            }
+        }
+    )
     # Keep age filters if you want; you’ll compute DOB cutoffs server-side
     min_age: Optional[int] = None
     max_age: Optional[int] = None

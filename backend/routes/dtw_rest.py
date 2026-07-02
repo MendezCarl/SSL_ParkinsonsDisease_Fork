@@ -7,7 +7,7 @@ import shutil
 from datetime import datetime, timezone
 import numpy as np
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 router = APIRouter(prefix="/dtw", tags=["dtw"])
 
@@ -17,6 +17,123 @@ DTW_BASE        = (PROJECT_BACKEND / "dtw_runs").resolve()
 DTW_BASE.mkdir(parents=True, exist_ok=True)
 
 print(f"[DTW REST] DTW_BASE = {DTW_BASE}")
+
+
+class DtwHealthResponse(BaseModel):
+    ok: bool
+    base: str
+    exists: bool
+
+
+class DtwDiagResponse(BaseModel):
+    base: str
+    exists: bool
+    tests: List[str]
+
+
+class DtwSessionLookupResponse(BaseModel):
+    testName: str
+    sessionId: str
+
+
+class DtwSessionMetaResponse(BaseModel):
+    session_id: str
+    created_utc: str | None = None
+    model: str | None = None
+    live_len: int | None = None
+    ref_len: int | None = None
+    distance_pos: float | None = None
+    similarity_overall: float | None = None
+    similarity_pos: float | None = None
+    similarity_amp: float | None = None
+    similarity_spd: float | None = None
+
+
+class XYSeries(BaseModel):
+    x: List[int]
+    y: List[float]
+
+
+class IntPathSeries(BaseModel):
+    i: List[int]
+    j: List[int]
+
+
+class WarpedSeries(BaseModel):
+    k: List[int]
+    live: List[float]
+    ref: List[float]
+
+
+class DtwSeriesCurve(BaseModel):
+    local_cost_path: XYSeries
+    cumulative_progress: XYSeries
+    alignment_map: XYSeries
+
+
+class DtwSeriesResponse(BaseModel):
+    ok: bool
+    testName: str
+    sessionId: str
+    distance_pos: float | None = None
+    distance_amp: float | None = None
+    distance_spd: float | None = None
+    avg_step_pos: float | None = None
+    similarity_overall: float | None = None
+    similarity_pos: float | None = None
+    similarity_amp: float | None = None
+    similarity_spd: float | None = None
+    series: Dict[str, DtwSeriesCurve]
+
+
+class DtwDownloadResponse(BaseModel):
+    npz: str
+    meta: str
+
+
+class DtwChannelDescriptor(BaseModel):
+    landmark: int
+    axis: str
+    d_index: int
+
+
+class DtwChannelResponse(BaseModel):
+    ok: bool
+    model: str
+    D: int
+    points: int
+    dims_per_point: int
+    channel: DtwChannelDescriptor
+    live: XYSeries
+    ref: XYSeries
+    warped: WarpedSeries
+    path: IntPathSeries
+
+
+class DtwAxisAggregateResponse(BaseModel):
+    ok: bool
+    model: str
+    D: int
+    points: int
+    dims_per_point: int
+    axis: str
+    reduce: str
+    landmarks_in: str
+    resolved_positions: List[int]
+    live: XYSeries
+    ref: XYSeries
+    warped: WarpedSeries
+    path: IntPathSeries
+
+
+class LabelSessionResponse(BaseModel):
+    ok: bool
+    session_id: str
+    confirmed_stage: int
+    label_source: str
+    training_copy: str
+    patient_updated: bool
+    patient_update_error: str | None = None
 
 def _test_dir(test_name: str) -> Path:
     p = DTW_BASE / test_name
@@ -67,12 +184,12 @@ def _parse_landmarks_param(landmarks: str | None, model: str, points: int) -> li
     return req
 
 
-@router.get("/health")
-def health() -> Dict[str, Any]:
+@router.get("/health", response_model=DtwHealthResponse, summary="DTW service health")
+def health() -> DtwHealthResponse:
     return {"ok": True, "base": str(DTW_BASE), "exists": DTW_BASE.exists()}
 
-@router.get("/diag")
-def diag() -> Dict[str, Any]:
+@router.get("/diag", response_model=DtwDiagResponse, summary="DTW storage diagnostics")
+def diag() -> DtwDiagResponse:
     return {
         "base": str(DTW_BASE),
         "exists": DTW_BASE.exists(),
@@ -85,8 +202,8 @@ def list_tests() -> List[str]:
         return []
     return sorted([d.name for d in DTW_BASE.iterdir() if d.is_dir()])
 
-@router.get("/sessions/lookup/{session_id}")
-def lookup_session(session_id: str) -> Dict[str, str]:
+@router.get("/sessions/lookup/{session_id}", response_model=DtwSessionLookupResponse, summary="Resolve a DTW session id to its test")
+def lookup_session(session_id: str) -> DtwSessionLookupResponse:
     if not DTW_BASE.exists():
         raise HTTPException(404, "DTW base not found")
     for t in DTW_BASE.iterdir():
@@ -96,8 +213,8 @@ def lookup_session(session_id: str) -> Dict[str, str]:
             return {"testName": t.name, "sessionId": session_id}
     raise HTTPException(404, {"error": str(DTW_BASE)})
 
-@router.get("/sessions/{test_name}")
-def list_sessions(test_name: str) -> List[Dict[str, Any]]:
+@router.get("/sessions/{test_name}", response_model=List[DtwSessionMetaResponse], summary="List saved DTW sessions for a test")
+def list_sessions(test_name: str) -> List[DtwSessionMetaResponse]:
     root = _test_dir(test_name)
     out: List[Dict[str, Any]] = []
     for d in sorted(root.iterdir()):
@@ -126,7 +243,11 @@ def list_sessions(test_name: str) -> List[Dict[str, Any]]:
     # newest first by timestamp string
     return sorted(out, key=lambda x: x.get("created_utc") or "", reverse=True)
 
-@router.get("/sessions/{test_name}/{session_id}/series")
+@router.get(
+    "/sessions/{test_name}/{session_id}/series",
+    response_model=DtwSeriesResponse,
+    summary="Get DTW metrics and plotted series for a session",
+)
 def get_series(
     test_name: str,
     session_id: str,
@@ -206,8 +327,12 @@ def get_series(
         },
     }
 
-@router.get("/sessions/{test_name}/{session_id}/download")
-def download_paths(test_name: str, session_id: str) -> Dict[str, str]:
+@router.get(
+    "/sessions/{test_name}/{session_id}/download",
+    response_model=DtwDownloadResponse,
+    summary="Get file paths for saved DTW artifacts",
+)
+def download_paths(test_name: str, session_id: str) -> DtwDownloadResponse:
     folder = _session_dir(test_name, session_id)
     return {
         "npz": str(folder / "dtw_artifacts.npz"),
@@ -242,7 +367,11 @@ def _downsample_xy(x: np.ndarray, y: np.ndarray, kmax: int) -> Tuple[List[int], 
     step = max(1, n // kmax)
     return x[::step].astype(int).tolist(), y[::step].astype(float).tolist()
 
-@router.get("/sessions/{test_name}/{session_id}/channel")
+@router.get(
+    "/sessions/{test_name}/{session_id}/channel",
+    response_model=DtwChannelResponse,
+    summary="Get DTW channel series for one landmark and axis",
+)
 def get_channel_series(
     test_name: str,
     session_id: str,
@@ -341,7 +470,11 @@ def get_channel_series(
 
    
 # --- Aggregate one axis across many (or all) landmarks into a 1D series ---
-@router.get("/sessions/{test_name}/{session_id}/axis_agg")
+@router.get(
+    "/sessions/{test_name}/{session_id}/axis_agg",
+    response_model=DtwAxisAggregateResponse,
+    summary="Aggregate one axis across selected landmarks for a DTW session",
+)
 def get_axis_aggregate(
     test_name: str,
     session_id: str,
@@ -447,6 +580,15 @@ def get_axis_aggregate(
 # ─────────────────────────── Doctor label endpoint ───────────────────────────
 
 class LabelSessionRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "confirmed_stage": 3,
+                "patient_id": "janes1720462800",
+                "notes": "Clinician review confirms Stage 3 after observing reduced amplitude.",
+            }
+        }
+    )
     confirmed_stage: int = Field(
         ...,
         ge=1,
@@ -473,13 +615,14 @@ class LabelSessionRequest(BaseModel):
 
 @router.patch(
     "/sessions/{test_name}/{session_id}/label",
+    response_model=LabelSessionResponse,
     summary="Doctor confirms or corrects the AI-predicted UPDRS stage",
 )
 async def label_session(
     test_name: str,
     session_id: str,
     body: LabelSessionRequest,
-) -> Dict[str, Any]:
+) -> LabelSessionResponse:
     folder = _session_dir(test_name, session_id)
     meta_path = folder / "meta.json"
 
