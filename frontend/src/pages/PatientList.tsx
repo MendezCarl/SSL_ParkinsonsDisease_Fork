@@ -6,6 +6,14 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -95,7 +103,7 @@ const PatientList = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const { toast } = useToast();
   const { isConnected, isChecking } = useApiStatus();
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
 
   const currentUser = useMemo(() => {
     const fullName = user?.fullName?.trim() || 'Demo Doctor';
@@ -109,6 +117,11 @@ const PatientList = () => {
 
   const getUserInitials = () => {
     return `${currentUser.firstName[0]}${currentUser.lastName[0]}`.toUpperCase();
+  };
+
+  const handleSignOut = () => {
+    logout();
+    navigate('/login');
   };
 
   const [sortField, setSortField] = useState<SortField>('lastName');
@@ -630,21 +643,35 @@ const PatientList = () => {
             </div>
             <div className="flex flex-col items-end space-y-3">
               {/* Profile Avatar */}
-              <button
-                onClick={() => navigate('/profile')}
-                className="group relative"
-                aria-label="View profile"
-              >
-                <Avatar className="h-10 w-10 cursor-pointer ring-2 ring-transparent hover:ring-primary transition-all">
-                  <AvatarImage src={currentUser.profileImage} alt="Profile" />
-                  <AvatarFallback className="bg-primary text-primary-foreground text-sm">
-                    {getUserInitials()}
-                  </AvatarFallback>
-                </Avatar>
-                <div className="absolute -bottom-8 right-0 bg-popover text-popover-foreground text-xs px-2 py-1 rounded shadow-md opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
-                  View Profile
-                </div>
-              </button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    className="group relative"
+                    aria-label="Open profile menu"
+                  >
+                    <Avatar className="h-10 w-10 cursor-pointer ring-2 ring-transparent hover:ring-primary transition-all">
+                      <AvatarImage src={currentUser.profileImage} alt="Profile" />
+                      <AvatarFallback className="bg-primary text-primary-foreground text-sm">
+                        {getUserInitials()}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div className="absolute -bottom-8 right-0 bg-popover text-popover-foreground text-xs px-2 py-1 rounded shadow-md opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
+                      Account Menu
+                    </div>
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-48">
+                  <DropdownMenuLabel>{currentUser.firstName} {currentUser.lastName}</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={() => navigate('/profile')}>
+                    Profile
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleSignOut}>
+                    Sign out
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
 
               {/* Action Buttons */}
               <div className="flex items-center space-x-3">
