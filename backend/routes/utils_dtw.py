@@ -9,11 +9,11 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 from tslearn.metrics import dtw_path
+from storage_paths import DTW_RUNS_DIR, TEMPLATES_DIR
 
-# ================== BASE PATHS (match your repo layout) ==================
-PROJECT_BACKEND = Path(__file__).resolve().parent               # .../project/backend
-TEMPLATES_ROOT  = (PROJECT_BACKEND / "templates").resolve()     # .../backend/templates
-DTW_BASE        = (PROJECT_BACKEND / "dtw_runs").resolve()      # .../backend/dtw_runs
+# ================== BASE PATHS ==================
+TEMPLATES_ROOT = TEMPLATES_DIR
+DTW_BASE = DTW_RUNS_DIR
 TEMPLATES_ROOT.mkdir(parents=True, exist_ok=True)
 DTW_BASE.mkdir(parents=True, exist_ok=True)
 
@@ -61,25 +61,22 @@ def _ensure_dir(p: Path) -> None:
 class TemplateLibrary:
     @staticmethod
     def load(test_name: str, model: str) -> np.ndarray:
-        """Load reference template X (T_ref, D) from backend/templates/<test>/<model>.npz."""
+        """Load reference template X (T_ref, D) from backend/data/templates/<test>/<model>.npz."""
         test_key = normalize_test_name(test_name)
 
-        primary  = TEMPLATES_ROOT / test_key / f"{model}.npz"
-        fallback = Path.cwd() / "backend" / "templates" / test_key / f"{model}.npz"  # extra dev convenience
+        primary = TEMPLATES_ROOT / test_key / f"{model}.npz"
 
-        for p in (primary, fallback):
-            if p.exists():
-                X = np.load(str(p))["X"].astype(np.float32)
-                if X.ndim != 2:
-                    raise ValueError(f"Template array must be 2D (T,D). Got {X.shape} at {p}")
-                print(f"[DTW] Using template: {p}")
-                return X
+        if primary.exists():
+            X = np.load(str(primary))["X"].astype(np.float32)
+            if X.ndim != 2:
+                raise ValueError(f"Template array must be 2D (T,D). Got {X.shape} at {primary}")
+            print(f"[DTW] Using template: {primary}")
+            return X
 
         raise FileNotFoundError(
             "Missing template file.\n"
             f"  looked for: {primary}\n"
-            f"  and also : {fallback}\n"
-            "Place template at backend/templates/<test>/<model>.npz with array 'X'."
+            "Place template at backend/data/templates/<test>/<model>.npz with array 'X'."
         )
 
 # ================== FEATURE EXTRACTION ==================

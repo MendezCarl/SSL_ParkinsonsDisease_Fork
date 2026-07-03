@@ -12,6 +12,7 @@ import uuid
 import numpy as np
 from typing import List, Optional, Dict
 from routes.utils_dtw import EndOnlyDTW, normalize_test_name
+from storage_paths import RECORDINGS_DIR
 
 from patient_manager import (
     TestHistoryManager
@@ -20,8 +21,7 @@ from fastapi import APIRouter
 
 router = APIRouter(prefix="/ws", tags=["websockets"])
 
-RECORDINGS_DIR = os.path.join(os.path.dirname(__file__), "recordings")
-os.makedirs(RECORDINGS_DIR, exist_ok=True)
+RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Resolve model files relative to this file: backend/models/
 _MODELS_DIR = Path(__file__).resolve().parent.parent / "models"
@@ -64,12 +64,12 @@ def _save_frames_to_mp4(frames: List[np.ndarray], fps: float = 30.0) -> str:
     recording_id = str(uuid.uuid4())
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     filename = f"ws_recording_{ts}_{recording_id}.mp4"
-    path = os.path.join(RECORDINGS_DIR, filename)
+    path = RECORDINGS_DIR / filename
 
     # Try H.264 first, fall back to mp4v if unavailable
     for fourcc_str in ("avc1", "H264", "mp4v"):
         fourcc = cv2.VideoWriter_fourcc(*fourcc_str)
-        writer = cv2.VideoWriter(path, fourcc, fps, (w, h))
+        writer = cv2.VideoWriter(str(path), fourcc, fps, (w, h))
         if writer.isOpened():
             print("Using fourcc:", fourcc_str)
             break

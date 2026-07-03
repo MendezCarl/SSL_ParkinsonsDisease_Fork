@@ -138,6 +138,7 @@ class PatientUpdate(BaseModel):
 
 class PatientResponse(BaseModel):
     patient_id: str
+    recordNumber: str
     name: str
     birthDate: datetime
     height: str

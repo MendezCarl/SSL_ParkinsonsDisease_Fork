@@ -8,12 +8,11 @@ from datetime import datetime, timezone
 import numpy as np
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from storage_paths import DTW_RUNS_DIR, LABELLED_TRAINING_DATA_DIR
 
 router = APIRouter(prefix="/dtw", tags=["dtw"])
 
-# Point to {project}/backend
-PROJECT_BACKEND = Path(__file__).resolve().parent               # .../project/backend
-DTW_BASE        = (PROJECT_BACKEND / "dtw_runs").resolve()
+DTW_BASE = DTW_RUNS_DIR
 DTW_BASE.mkdir(parents=True, exist_ok=True)
 
 print(f"[DTW REST] DTW_BASE = {DTW_BASE}")
@@ -643,13 +642,7 @@ async def label_session(
     meta_path.write_text(json.dumps(meta, indent=2))
 
     # Archive for future training
-    training_dir = (
-        DTW_BASE.parent
-        / "_labelled_training_data"
-        / test_name
-        / f"stage_{body.confirmed_stage}"
-        / session_id
-    )
+    training_dir = LABELLED_TRAINING_DATA_DIR / test_name / f"stage_{body.confirmed_stage}" / session_id
     training_dir.mkdir(parents=True, exist_ok=True)
     for src in folder.iterdir():
         dst = training_dir / src.name
