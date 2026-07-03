@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Optional, List, Dict, Any, Tuple
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import func, select, and_, desc
+from sqlalchemy import func, select, and_, desc, or_
 from sqlalchemy.orm import Session
 
 from repo.sql_models import Patient, LabResult, DoctorNote, TestResult
@@ -143,7 +143,12 @@ class PatientRepository:
         like = f"%{query_str}%"
         return (
             self.session.query(Patient)
-            .filter(Patient.name.ilike(like))
+            .filter(
+                or_(
+                    Patient.name.ilike(like),
+                    Patient.record_number.ilike(like),
+                )
+            )
             .order_by(Patient.name.asc())
             .all()
         )

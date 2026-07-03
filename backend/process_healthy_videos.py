@@ -3,7 +3,7 @@
 process_healthy_videos.py
 =========================
 Processes healthy-subject videos from backend/healthy_data/<test>/ and
-rebuilds the DTW reference templates in backend/routes/templates/<test>/<model>.npz
+rebuilds the DTW reference templates in backend/data/templates/<test>/<model>.npz
 
 Directory layout expected:
     backend/
@@ -11,9 +11,9 @@ Directory layout expected:
             finger-tapping/   <- drop .mp4 / .mov / .webm videos here
             fist-open-close/
             stand-and-sit/
-        routes/
+        data/
             templates/        <- rebuilt .npz files written here
-        jsons/                <- per-video keypoint JSONs archived here
+            jsons/            <- per-video keypoint JSONs archived here
 
 Usage:
     # Process all tests
@@ -41,12 +41,11 @@ from pathlib import Path
 import cv2
 import numpy as np
 from scipy.interpolate import interp1d
+from storage_paths import JSONS_DIR, TEMPLATES_DIR
 
 # ─────────────────────────── Paths ───────────────────────────
 BACKEND_DIR    = Path(__file__).resolve().parent
 HEALTHY_DIR    = BACKEND_DIR / "healthy_data"
-TEMPLATES_DIR  = BACKEND_DIR / "routes" / "templates"
-JSONS_DIR      = BACKEND_DIR / "jsons"
 MODELS_DIR     = BACKEND_DIR / "models"
 HAND_MODEL     = str(MODELS_DIR / "hand_landmarker.task")
 POSE_MODEL     = str(MODELS_DIR / "pose_landmarker_lite.task")

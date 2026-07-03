@@ -31,6 +31,7 @@ class Patient(Base):
     __tablename__ = "patients"
 
     patient_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    record_number: Mapped[Optional[str]] = mapped_column(String(32))
     # owner
     user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
@@ -113,7 +114,6 @@ if __name__ == "__main__":
         s.add_all([u, p])
         s.commit()
         # s.query(Patient).filter_by(user_id=u.id).all()
-
 
 
 

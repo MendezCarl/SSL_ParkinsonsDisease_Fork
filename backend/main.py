@@ -14,15 +14,13 @@ from routes.websockets import router as ws_router
 from routes.classifier import router as classifier_router
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from repo.sql_models import User
-from repo.db import engine
 from jose import jwt, JWTError
 from passlib.context import CryptContext
 from patient_manager import SessionLocal
+from storage_paths import RECORDINGS_DIR
 
 # ============ Paths / Folders ============
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-RECORDINGS_DIR = os.path.join(BASE_DIR, "routes", "recordings")
-os.makedirs(RECORDINGS_DIR, exist_ok=True)
+RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
 
 # ============ Lazy imports (avoid libGL issues on boot) ============
 
@@ -328,7 +326,7 @@ async def upload_video(
     try:
         now_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         filename = f"{patient_id}_{test_name}_{now_str}.mov"
-        filepath = os.path.join(RECORDINGS_DIR, filename)
+        filepath = RECORDINGS_DIR / filename
 
         with open(filepath, "wb") as buffer:
             shutil.copyfileobj(video.file, buffer)
@@ -357,7 +355,7 @@ def list_videos(patient_id: str, test_name: str):
             if f.startswith(f"{patient_id}_{test_name}_") and (f.endswith(".mov") or f.endswith(".mp4"))
         ]
         matching.sort(
-            key=lambda f: os.path.getmtime(os.path.join(RECORDINGS_DIR, f)),
+            key=lambda f: os.path.getmtime(RECORDINGS_DIR / f),
             reverse=True
         )
         return {"success": True, "videos": matching}
@@ -366,7 +364,7 @@ def list_videos(patient_id: str, test_name: str):
 
 @app.get("/recordings/{filename}", response_class=FileResponse)
 def get_recording_file(filename: str):
-    file_path = os.path.join(RECORDINGS_DIR, filename)
+    file_path = RECORDINGS_DIR / filename
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Video not found")
     media_type = "video/mp4" if filename.endswith(".mp4") else "video/quicktime"

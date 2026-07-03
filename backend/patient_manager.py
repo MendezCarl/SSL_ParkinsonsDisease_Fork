@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Union
 import json
 from datetime import datetime
 from sqlalchemy.orm import Session
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker, Session
 from fastapi import HTTPException as HttpException
 from datetime import datetime, timezone
@@ -21,19 +21,77 @@ from uuid import uuid4
 # --- your models & repos ---
 from repo.sql_models import Base, Patient, LabResult, DoctorNote  # Visit, TestResult defined there as well
 from repo.patient_repository import PatientRepository
-from repo.test_repository import TestResultRepository
+from repo.result_repository import TestResultRepository
 from routes.contracts import (
     PatientCreate, PatientUpdate,
     PatientResponse, PatientsListResponse,
     PatientSearchResponse, FilterCriteria,
     LabResultOut, DoctorNoteOut, LabResultIn, DoctorNoteIn
 )
+from storage_paths import APP_DB_PATH, TEST_HISTORY_PATH
 
 # ----------------- DB bootstrap -----------------
-DB_URL = os.getenv("DB_URL", "sqlite:///./app.db")
+DB_URL = os.getenv("DB_URL", f"sqlite:///{APP_DB_PATH.as_posix()}")
 engine = create_engine(DB_URL, future=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False, autoflush=False, future=True)
 Base.metadata.create_all(engine)
+
+RECORD_NUMBER_PREFIX = "REC-"
+RECORD_NUMBER_WIDTH = 6
+
+
+def _format_record_number(sequence: int) -> str:
+    return f"{RECORD_NUMBER_PREFIX}{sequence:0{RECORD_NUMBER_WIDTH}d}"
+
+
+def _parse_record_number(value: str | None) -> int | None:
+    if not value:
+        return None
+    match = re.fullmatch(rf"{re.escape(RECORD_NUMBER_PREFIX)}(\d+)", value)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def _ensure_patient_record_number_schema() -> None:
+    with engine.begin() as connection:
+        inspector = inspect(connection)
+        if "patients" not in inspector.get_table_names():
+            return
+
+        columns = {column["name"] for column in inspector.get_columns("patients")}
+        if "record_number" not in columns:
+            connection.execute(text("ALTER TABLE patients ADD COLUMN record_number VARCHAR(32)"))
+
+        rows = connection.execute(
+            text("SELECT patient_id, record_number FROM patients ORDER BY rowid")
+        ).mappings().all()
+
+        next_sequence = max((_parse_record_number(row["record_number"]) or 0) for row in rows) + 1 if rows else 1
+
+        for row in rows:
+            if row["record_number"]:
+                continue
+            connection.execute(
+                text("UPDATE patients SET record_number = :record_number WHERE patient_id = :patient_id"),
+                {
+                    "record_number": _format_record_number(next_sequence),
+                    "patient_id": row["patient_id"],
+                },
+            )
+            next_sequence += 1
+
+        indexes = {index["name"] for index in inspect(connection).get_indexes("patients")}
+        if "ix_patients_record_number_unique" not in indexes:
+            connection.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS ix_patients_record_number_unique "
+                    "ON patients (record_number)"
+                )
+            )
+
+
+_ensure_patient_record_number_schema()
 
 # ----------------- Helpers -----------------
 _NUM_RE = re.compile(r"(\d+\.?\d*)")
@@ -56,6 +114,12 @@ def _parse_number(value, lo: float, hi: float) -> Optional[float]:
 def _gen_patient_id(name: str) -> str:
     base = (name or "").lower().replace(" ", "")[:5] or "pt"
     return f"{base}{int(datetime.now().timestamp())}"
+
+
+def _next_record_number(session: Session) -> str:
+    existing = session.query(Patient.record_number).filter(Patient.record_number.is_not(None)).all()
+    next_sequence = max((_parse_record_number(value) or 0) for (value,) in existing) + 1 if existing else 1
+    return _format_record_number(next_sequence)
 
 
 def _gen_entry_id(prefix: str) -> str:
@@ -165,6 +229,7 @@ def _patient_to_api_dict(session: Session, p: Patient) -> PatientResponse:
 
     return PatientResponse(
         patient_id=p.patient_id,
+        recordNumber=p.record_number or "",
         name=p.name or "",
         birthDate=p.dob,  # or adjust type to date if you prefer
         height=str(p.height or 0),
@@ -210,9 +275,11 @@ def create_patient(
     try:
         with SessionLocal() as session:
             prepo = PatientRepository(session)
+            record_number = _next_record_number(session)
 
             dbp = Patient(
                 patient_id=patient_id,
+                record_number=record_number,
                 user_id=123,
                 name=name,
                 dob=dob,
@@ -358,12 +425,15 @@ def delete_patient_record(patient_id: str) -> Dict[str, Any]:
 def search_patients(query: str) -> Dict[str, Any]:
     with SessionLocal() as session:
         prepo = PatientRepository(session)
-        # If your repo has search_by_name, use it; otherwise emulate:
-        rows = prepo.filter(criteria=type("C", (), {"name": query, "min_age": None, "max_age": None})()) \
-               if hasattr(prepo, "filter") else prepo.list()
-        # If using .filter above returns List[Patient], keep it; otherwise, fallback name contains:
-        if not hasattr(prepo, "filter"):
-            rows = [p for p in rows if (p.name or "").lower().find(query.lower()) >= 0]
+        if hasattr(prepo, "search_by_name"):
+            rows = prepo.search_by_name(query)
+        else:
+            rows = prepo.list()
+            q = query.lower()
+            rows = [
+                p for p in rows
+                if q in (p.name or "").lower() or q in (p.record_number or "").lower()
+            ]
         return {"success": True, "patients": [_patient_to_api_dict(session, r) for r in rows], "count": len(rows)}
 
 def filter_patients(criteria: Dict[str, Any]) -> Dict[str, Any]:
@@ -437,7 +507,7 @@ async def async_filter_patients(criteria: Dict[str, Any]) -> Dict[str, Any]:
 # =========================
 # TestHistoryManager refactor -> SQL TestResultRepository
 # =========================
-TEST_HISTORY_FILE = os.path.join(os.path.dirname(__file__), 'test_history.json')
+TEST_HISTORY_FILE = str(TEST_HISTORY_PATH)
 
 class TestHistoryManager:
     _lock = threading.Lock()
