@@ -3,8 +3,8 @@ from __future__ import annotations
 import numpy as np
 from fastapi import APIRouter, HTTPException, Query
 
-from patient_manager import async_update_patient_info
-from routes.contracts import PatientUpdate
+from schema.patient_contracts import PatientUpdate
+from services import patient_service
 from schema.classifier_schema import (
     APIErrorResponse,
     LSTMCNNPredictAndUpdateResponse,
@@ -125,7 +125,7 @@ async def predict_updrs_and_update_patient(
 
         patient_updated = False
         if persist_update:
-            update_result = await async_update_patient_info(
+            update_result = await patient_service.update_patient(
                 patient_id,
                 PatientUpdate(severity=result["severity"]),
             )

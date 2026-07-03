@@ -78,11 +78,12 @@ export function PatientCsvImportDialog({
             <div className="bg-muted/50 rounded-lg p-4">
               <h4 className="text-sm font-semibold mb-2">CSV Format Requirements:</h4>
               <ul className="text-xs text-muted-foreground space-y-1">
-                <li>• Headers: firstName, lastName, birthDate, severity</li>
-                <li>• Severity: Use "Stage 1" through "Stage 5" or numbers 1-5</li>
-                <li>• Birth Date: Use YYYY-MM-DD format (e.g., 1980-05-12)</li>
+                <li>• Required data: patient name and birth date columns</li>
+                <li>• Accepted name headers include firstName/lastName or fullName</li>
+                <li>• Severity accepts Stage 1-5, numbers 1-5, or common aliases</li>
+                <li>• Birth dates can be ISO or common slash/dash date formats</li>
                 <li>• Optional fields: height, weight, labResults, doctorNotes</li>
-                <li>• Record numbers are generated automatically by the system.</li>
+                <li>• Record numbers and import normalization are handled by the backend.</li>
               </ul>
             </div>
           </div>

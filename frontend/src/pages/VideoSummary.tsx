@@ -568,6 +568,13 @@ const VideoSummary = () => {
     setRouteResolved(false);
 
     const currentTestKey = normalizeTestKey(currentTest?.type);
+    if (currentTest && String(currentTest.id) === testId && currentTestKey) {
+      setTestKey(currentTestKey);
+      setSessionId(currentTest.dtwSessionId ?? null);
+      setRouteResolved(true);
+      return;
+    }
+
     if (currentTest?.dtwSessionId && testId === currentTest.dtwSessionId && currentTestKey) {
       setTestKey(currentTestKey);
       setSessionId(currentTest.dtwSessionId);
@@ -613,7 +620,7 @@ const VideoSummary = () => {
     })();
 
     return () => ctrl.abort();
-  }, [currentTest?.dtwSessionId, currentTest?.type, testId]);
+  }, [currentTest, currentTest?.dtwSessionId, currentTest?.type, testId]);
 
   // Videos list
   useEffect(() => {

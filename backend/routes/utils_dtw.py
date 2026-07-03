@@ -57,6 +57,12 @@ def normalize_test_name(t: str | None) -> str:
 def _ensure_dir(p: Path) -> None:
     p.mkdir(parents=True, exist_ok=True)
 
+
+def generate_session_id() -> str:
+    ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
+    sid = uuid4().hex[:8]
+    return f"{ts}_{sid}"
+
 # ================== TEMPLATES ==================
 class TemplateLibrary:
     @staticmethod
@@ -171,7 +177,7 @@ def normalize_dtw(dtw: float, L_avg: float, R_data: float, eps: float = 1e-6) ->
 def save_dtw_npz(
     save_root: str | None,
     test_name: str,
-    test_id: str,
+    session_id: str,
     model: str,
     X_live: np.ndarray,
     Y_ref: np.ndarray,
@@ -196,9 +202,7 @@ def save_dtw_npz(
                     "finger-tapping" if "finger" in (test_name or "") else "fist-open-close"
 
     ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
-    sid = uuid4().hex[:8]
-    session_id = f"{ts}_{sid}"
-    folder = (DTW_BASE / canonical / test_id)
+    folder = (DTW_BASE / canonical / session_id)
     _ensure_dir(folder)
 
     np.savez_compressed(
@@ -245,7 +249,7 @@ def save_dtw_npz(
 
 # ================== END-ONLY DTW ==================
 class EndOnlyDTW:
-    def __init__(self, test_name: str, model: str,  test_id: Optional[str] = None, use_z: bool = False,
+    def __init__(self, test_name: str, model: str,  session_id: Optional[str] = None, use_z: bool = False,
                  sakoe_radius: Union[int, str, None] = None):
         self.test_name = normalize_test_name(test_name)
         self.model = model
@@ -254,7 +258,7 @@ class EndOnlyDTW:
         self._pushed_frames = 0
         self._pushed_feats = 0
         self._pushed_drops = 0
-        self.test_id = test_id
+        self.session_id = session_id or generate_session_id()
         try:
             self.X_ref = TemplateLibrary.load(self.test_name, model)  # (T_ref, D)
             self.init_error = None
@@ -366,10 +370,10 @@ class EndOnlyDTW:
         S_overall = (S_pos + S_amp + S_spd) / 3.0
         avg_step_pos = float(pos_total / max(1, len(pos_path)))
 
-        save_dtw_npz(
+        save_result = save_dtw_npz(
             save_root=None,
             test_name=self.test_name,
-            test_id=self.test_id,
+            session_id=self.session_id,
             model=self.model,
             X_live=X,
             Y_ref=Y,
@@ -413,8 +417,12 @@ class EndOnlyDTW:
 
         return {
             "ok": True,
+            "session_id": self.session_id,
+            "artifacts": save_result,
             "similarity_overall": S_overall,
             "similarity_pos": S_pos,
             "similarity_amp": S_amp,
             "similarity_spd": S_spd,
+            "distance": pos_total,
+            "avg_step_cost": avg_step_pos,
         }

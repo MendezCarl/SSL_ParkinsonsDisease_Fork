@@ -4,9 +4,16 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import torch
 
-from ml.mil_classifier import MILClassifier
+try:
+    import torch
+except ModuleNotFoundError:  # pragma: no cover - exercised indirectly in test environments without torch
+    torch = None
+
+try:
+    from ml.mil_classifier import MILClassifier
+except ModuleNotFoundError:  # pragma: no cover - exercised indirectly in test environments without torch
+    MILClassifier = None
 
 
 WINDOW = 30
@@ -21,8 +28,14 @@ class LSTMCNNInferenceService:
         self.checkpoint_path = (
             base_dir.parents[1] / "Park-LSTM-Autoencoder" / "checkpoints" / "lstm_mil_classifier.pt"
         )
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu") if torch is not None else None
         self.model: MILClassifier | None = None
+
+    def _require_runtime(self) -> None:
+        if torch is None or MILClassifier is None:
+            raise ModuleNotFoundError(
+                "torch and ml.mil_classifier must be installed to run LSTM-CNN inference."
+            )
 
     @staticmethod
     def _to_severity(predicted_updrs_stage: int) -> tuple[str, int]:
@@ -56,6 +69,7 @@ class LSTMCNNInferenceService:
         return np.stack(windows).astype(np.float32)
 
     def _load_model(self) -> MILClassifier:
+        self._require_runtime()
         if self.model is not None:
             return self.model
 
@@ -75,6 +89,7 @@ class LSTMCNNInferenceService:
         return model
 
     def predict(self, sequence: list[list[float]] | np.ndarray, return_attention: bool = False) -> dict[str, Any]:
+        self._require_runtime()
         seq = self._validate_sequence(sequence)
         windows = self._window_sequence(seq)  # (n_windows, 30, 24)
 

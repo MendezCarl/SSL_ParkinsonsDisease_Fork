@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 import os
 import re
 from datetime import datetime, date
+from io import StringIO
 from typing import Any, Dict, List, Optional, Union
 
 import json
@@ -21,8 +23,7 @@ from uuid import uuid4
 # --- your models & repos ---
 from repo.sql_models import Base, Patient, LabResult, DoctorNote  # Visit, TestResult defined there as well
 from repo.patient_repository import PatientRepository
-from repo.result_repository import TestResultRepository
-from routes.contracts import (
+from schema.patient_contracts import (
     PatientCreate, PatientUpdate,
     PatientResponse, PatientsListResponse,
     PatientSearchResponse, FilterCriteria,
@@ -147,8 +148,10 @@ def _validate(data: Dict[str, Any]) -> Dict[str, str]:
 
     if "severity" in data:
         s = str(data["severity"]).strip()
-        if s.lower() in {"low", "medium", "high"} or re.fullmatch(r"Stage [1-5]", s):
-            pass
+        if s and not (s.lower() in {"low", "medium", "high"} or re.fullmatch(r"Stage [1-5]", s)):
+            errors["severity"] = "Severity must be low, medium, high, or Stage 1-5"
+
+    return errors
 
 _TEST_NAME_ALIASES = {
     "stand-and-sit": "stand-and-sit",
@@ -191,6 +194,13 @@ def normalize_severity(value: str) -> str:
 
     normalized = value.strip().lower()
 
+    if re.fullmatch(r"[1-5]", normalized):
+        return f"Stage {normalized}"
+
+    match = re.fullmatch(r"stage[_\-\s]*([1-5])", normalized)
+    if match:
+        return f"Stage {match.group(1)}"
+
     stage_map = {
         "stage 1": "Stage 1",
         "stage 2": "Stage 2",
@@ -213,6 +223,212 @@ def normalize_severity(value: str) -> str:
 
     return legacy_map.get(normalized, "Stage 1")
 
+
+def _normalize_csv_header_name(value: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", (value or "").lower()).strip()
+
+
+def _csv_header_to_key(header: str) -> str | None:
+    normalized = _normalize_csv_header_name(header)
+
+    if normalized in {"firstname", "first", "givenname", "given"}:
+        return "firstName"
+    if normalized in {"lastname", "last", "surname", "familyname"}:
+        return "lastName"
+    if normalized in {"fullname", "name"}:
+        return "fullName"
+    if normalized in {"birthdate", "dob", "dateofbirth", "birth"}:
+        return "birthDate"
+    if normalized in {"height", "ht"}:
+        return "height"
+    if normalized in {"weight", "wt"}:
+        return "weight"
+    if normalized in {"recordnumber", "recordno", "record", "id", "patientid"}:
+        return "recordNumber"
+    if normalized in {"severity", "stage", "parkinsonseverity"}:
+        return "severity"
+    if normalized in {"labresults", "labresult", "labs", "lab"}:
+        return "labResults"
+    if normalized in {"doctornotes", "doctornote", "notes", "note"}:
+        return "doctorNotes"
+    if normalized in {"physician", "primaryphysician", "doctor", "addedby", "provider"}:
+        return "addedBy"
+    return None
+
+
+def _parse_csv_birth_date(value: str) -> str | None:
+    if not value:
+        return None
+
+    candidate = value.strip()
+    if not candidate:
+        return None
+
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", candidate):
+        return candidate
+
+    match = re.fullmatch(r"(\d{1,2})[/-](\d{1,2})[/-](\d{4})", candidate)
+    if match:
+        a = int(match.group(1))
+        b = int(match.group(2))
+        year = int(match.group(3))
+
+        if a > 12:
+            day, month = a, b
+        elif b > 12:
+            month, day = a, b
+        elif "/" in candidate:
+            month, day = a, b
+        else:
+            day, month = a, b
+
+        if 1 <= month <= 12 and 1 <= day <= 31:
+            return f"{year}-{month:02d}-{day:02d}"
+
+    try:
+        return datetime.fromisoformat(candidate).date().isoformat()
+    except ValueError:
+        pass
+
+    try:
+        parsed = datetime.strptime(candidate, "%b %d, %Y")
+        return parsed.date().isoformat()
+    except ValueError:
+        return None
+
+
+def _calculate_age_from_birth_date(value: str) -> int:
+    try:
+        dob = date.fromisoformat(value)
+    except ValueError:
+        return 0
+
+    today = date.today()
+    age = today.year - dob.year
+    if (today.month, today.day) < (dob.month, dob.day):
+        age -= 1
+    return max(age, 0)
+
+
+def import_patients_csv_text(csv_text: str) -> Dict[str, Any]:
+    if not csv_text or not csv_text.strip():
+        raise ValueError("CSV file is empty")
+
+    reader = csv.DictReader(StringIO(csv_text))
+    if not reader.fieldnames:
+        raise ValueError("CSV must contain a header row")
+
+    header_map = {
+        header: _csv_header_to_key(header)
+        for header in reader.fieldnames
+        if header is not None
+    }
+    recognized_headers = {mapped for mapped in header_map.values() if mapped}
+    if not recognized_headers:
+        raise ValueError("CSV does not contain any recognized patient columns")
+
+    result: Dict[str, Any] = {
+        "success": True,
+        "success_count": 0,
+        "failure_count": 0,
+        "imported_patient_ids": [],
+        "errors": [],
+    }
+
+    has_data_rows = False
+    for row_number, row in enumerate(reader, start=2):
+        raw_row = {
+            str(key).strip(): (value or "").strip()
+            for key, value in row.items()
+            if key is not None
+        }
+        if not any(raw_row.values()):
+            continue
+
+        has_data_rows = True
+        normalized_row: Dict[str, str] = {
+            "firstName": "",
+            "lastName": "",
+            "fullName": "",
+            "birthDate": "",
+            "height": "",
+            "weight": "",
+            "severity": "",
+            "labResults": "",
+            "doctorNotes": "",
+            "addedBy": "",
+        }
+
+        for header, raw_value in raw_row.items():
+            mapped_key = header_map.get(header)
+            if mapped_key:
+                normalized_row[mapped_key] = raw_value
+
+        if normalized_row["fullName"] and not (normalized_row["firstName"] or normalized_row["lastName"]):
+            parts = normalized_row["fullName"].split()
+            normalized_row["firstName"] = parts[0] if parts else ""
+            normalized_row["lastName"] = " ".join(parts[1:]) if len(parts) > 1 else ""
+
+        birth_date = _parse_csv_birth_date(normalized_row["birthDate"]) or normalized_row["birthDate"]
+        height = normalized_row["height"] or "170 cm"
+        weight = normalized_row["weight"] or "70 kg"
+        severity = normalize_severity(normalized_row["severity"])
+        added_by = normalized_row["addedBy"] or "Unknown"
+        full_name = f"{normalized_row['firstName']} {normalized_row['lastName']}".strip() or "Unknown Patient"
+
+        lab_results_history = []
+        if normalized_row["labResults"]:
+            lab_results_history.append(
+                LabResultIn(
+                    id=_gen_entry_id("lab"),
+                    date=datetime.now(),
+                    results=normalized_row["labResults"],
+                    added_by=added_by,
+                )
+            )
+
+        doctors_notes_history = []
+        if normalized_row["doctorNotes"]:
+            doctors_notes_history.append(
+                DoctorNoteIn(
+                    id=_gen_entry_id("note"),
+                    date=datetime.now(),
+                    note=normalized_row["doctorNotes"],
+                    added_by=added_by,
+                )
+            )
+
+        create_result = create_patient(
+            name=full_name,
+            age=_calculate_age_from_birth_date(birth_date),
+            birthDate=birth_date,
+            height=height,
+            weight=weight,
+            lab_results_history=lab_results_history,
+            doctors_notes_history=doctors_notes_history,
+            severity=severity,
+        )
+
+        if create_result.get("success"):
+            result["success_count"] += 1
+            result["imported_patient_ids"].append(create_result["patient_id"])
+            continue
+
+        result["failure_count"] += 1
+        result["errors"].append(
+            {
+                "row": row_number,
+                "errors": create_result.get("errors") or {},
+                "error": create_result.get("error"),
+                "raw": raw_row,
+            }
+        )
+
+    if not has_data_rows:
+        raise ValueError("CSV must contain at least one data row")
+
+    return result
+
 def _patient_to_api_dict(session: Session, p: Patient) -> PatientResponse:
     prepo = PatientRepository(session)
     labs = sorted(
@@ -234,7 +450,7 @@ def _patient_to_api_dict(session: Session, p: Patient) -> PatientResponse:
         birthDate=p.dob,  # or adjust type to date if you prefer
         height=str(p.height or 0),
         weight=str(p.weight or 0),
-        severity=p.severity or "",
+        severity=normalize_severity(p.severity or ""),
         latest_lab_result=latest_lr,
         latest_doctor_note=latest_dn,
         lab_results_history=[LabResultOut.model_validate(x) for x in labs],
@@ -260,6 +476,8 @@ def create_patient(
     })
     if errs:
         return {"success": False, "errors": errs}
+
+    severity = normalize_severity(severity)
 
     try:
         dob = birthDate if isinstance(birthDate, date) else date.fromisoformat(str(birthDate))
@@ -377,7 +595,7 @@ def update_patient_info(patient_id: str, updated_data: PatientUpdate) -> Dict[st
             dbp.weight = int(w) if w is not None else None
 
         if "severity" in data:
-            dbp.severity = data["severity"]
+            dbp.severity = normalize_severity(data["severity"])
 
         session.commit()
         return {"success": True, "patient_id": patient_id}
@@ -504,9 +722,11 @@ async def async_filter_patients(criteria: Dict[str, Any]) -> Dict[str, Any]:
         return filter_patients(criteria)
 
 
-# =========================
-# TestHistoryManager refactor -> SQL TestResultRepository
-# =========================
+async def async_import_patients_csv_text(csv_text: str) -> Dict[str, Any]:
+    async with _async_lock:
+        return import_patients_csv_text(csv_text)
+
+
 TEST_HISTORY_FILE = str(TEST_HISTORY_PATH)
 
 class TestHistoryManager:

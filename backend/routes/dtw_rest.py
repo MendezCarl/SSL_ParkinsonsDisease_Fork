@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import numpy as np
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from services import patient_service
 from storage_paths import DTW_RUNS_DIR, LABELLED_TRAINING_DATA_DIR
 
 router = APIRouter(prefix="/dtw", tags=["dtw"])
@@ -159,7 +160,11 @@ def _apply_reduce(arr: np.ndarray, how: str) -> np.ndarray:
         return arr.min(axis=1)
     if how == "max":
         return arr.max(axis=1)
-    raise HTTPException(400, f"Unsupported reduce='{how}' (use mean|median|sum|min|max)")
+    if how == "pca1":
+        centered = arr - arr.mean(axis=0, keepdims=True)
+        _, _, vh = np.linalg.svd(centered, full_matrices=False)
+        return centered @ vh[0]
+    raise HTTPException(400, f"Unsupported reduce='{how}' (use mean|median|sum|min|max|pca1)")
 
 def _parse_landmarks_param(landmarks: str | None, model: str, points: int) -> list[int]:
     """
@@ -375,7 +380,7 @@ def get_channel_series(
     test_name: str,
     session_id: str,
     landmark: int = Query(0, ge=0, description="0..20 for hands; 0..32 for pose"),
-    axis: str = Query("x", regex="^(x|y|z)$"),
+    axis: str = Query("x", pattern="^(x|y|z)$"),
     max_points: int = Query(400, ge=50, le=3000),
 ) -> Dict[str, Any]:
     """
@@ -477,7 +482,7 @@ def get_channel_series(
 def get_axis_aggregate(
     test_name: str,
     session_id: str,
-    axis: str = Query("x", regex="^(x|y|z)$"),
+    axis: str = Query("x", pattern="^(x|y|z)$"),
     landmarks: str | None = Query(
         None,
         description="Use 'all' or CSV (e.g., '0,1,2'). Hands: 0..20. Pose: 0..32."
@@ -653,10 +658,9 @@ async def label_session(
     patient_updated = False
     if body.patient_id:
         try:
-            from patient_manager import async_update_patient_info
-            from routes.contracts import PatientUpdate
+            from schema.patient_contracts import PatientUpdate
             severity_str = f"Stage {body.confirmed_stage}"
-            result = await async_update_patient_info(
+            result = await patient_service.update_patient(
                 body.patient_id,
                 PatientUpdate(severity=severity_str),
             )

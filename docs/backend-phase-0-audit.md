@@ -229,6 +229,66 @@ Examples of contract spread:
 
 This is functional, but it is not yet a normalized payload contract.
 
+## Re-audit Delta (Current Branch)
+
+The original audit still broadly holds. A repeat pass against the current branch found these additional issues:
+
+### 12. Websocket `dtw_saved` completion payload still does not expose a session identifier
+
+`backend/routes/utils_dtw.py::save_dtw_npz()` returns `session_id`, artifact paths, and timestamp metadata, but `EndOnlyDTW.finalize_and_save()` discards that return value and only forwards similarity metrics.
+
+Downstream effect:
+
+- `backend/routes/websockets.py` emits `{"type": "dtw_saved", ...}` without the canonical session id
+- the frontend still cannot anchor later REST lookups or history writes to the save result directly
+
+### 13. Retakes reuse the same route-level `testId`, so DTW artifacts can be overwritten
+
+`frontend/src/pages/TestSelection.tsx` generates one `test-<timestamp>` before entering recording. `frontend/src/pages/VideoRecording.tsx` reuses that same route param for every websocket `init`, including retakes.
+
+Because `backend/routes/utils_dtw.py::save_dtw_npz()` stores artifacts under `backend/data/dtw_runs/<test>/<test_id>/`, repeated takes for the same route can write back into the same folder instead of producing a fresh session.
+
+### 14. Test-history contract drift is wider than the original audit captured
+
+`backend/main.py` now publishes a richer `PatientTestHistoryEntry` contract with fields such as:
+
+- `test_id`
+- `fps`
+- `summary_available`
+- `dtw.session_id`
+
+But the live websocket writer in `backend/routes/websockets.py` still persists only:
+
+- `test_name`
+- `date`
+- `recording_file`
+- `frame_count`
+
+This means the public contract now implies capabilities that the live recording path does not populate.
+
+### 15. `backend/legacy/history_manager.py` is a confirmed dead path
+
+Active code still imports `TestHistoryManager` from `backend/patient_manager.py`, not from `backend/legacy/history_manager.py`.
+
+That legacy copy should be treated the same way as the other archived files: present for reference only, not authoritative for the live flow.
+
+### 16. The DTW aggregate contract is inconsistent between frontend and backend
+
+`frontend/src/services/dtw.ts` allows `reduce: "pca1"` for axis aggregates, but `backend/routes/dtw_rest.py` only accepts:
+
+- `mean`
+- `median`
+- `sum`
+- `min`
+- `max`
+
+This is another example of frontend/backend contract drift that should be normalized during the Phase 2 / Phase 5 pass.
+
+### Repeat-audit summary
+
+- No original findings in this audit scope were fully resolved by the current branch.
+- The most important new Phase 2 deltas are missing `dtw_saved.session_id`, retake overwrite risk, and the widened history-schema drift.
+
 ## Confirmed Stale Or Misaligned Paths
 
 These paths should not be treated as authoritative when redesigning the live flow:

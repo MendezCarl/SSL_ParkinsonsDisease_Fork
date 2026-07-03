@@ -12,13 +12,14 @@ Based on the Phase 0 audit findings in `docs/backend-phase-0-audit.md`.
 - DTW session identity is inconsistent across three different identifiers.
 - Test history does not store patient-to-session linkage.
 - Keypoint overlay contract is spread across four layers.
+- Repeat audit added five more deltas: missing `dtw_saved.session_id`, retake overwrite risk, widened history-schema drift, duplicate legacy history-manager copy, and DTW reduce-contract mismatch.
 
 ---
 
-## Poolle 0.5 — Fix Broken Validation (PREREQUISITE FOR PHASE 1)
+## Phase 0.5 — Fix Broken Validation (PREREQUISITE FOR PHASE 1)
 
 ### Target
-Make `backend/patient_manager.py::_validate()` actually return its `errors` dict to callers.
+Make `backend/patient_manager.py::_validate()` actually return its `errors` dict to callers, and ensure the existing severity branch rejects invalid non-empty values.
 
 ### Why this is a prerequisite
 - Phase 1 will build a backend import service on top of the same validation path.
@@ -28,6 +29,7 @@ Make `backend/patient_manager.py::_validate()` actually return its `errors` dict
 ### Verification
 - `create_patient` returns `errors` for invalid inputs instead of silently succeeding.
 - `update_patient_info` returns `errors` for invalid inputs.
+- Invalid severity values are rejected consistently in both paths.
 - Existing frontend create/update forms surface errors correctly.
 
 ### Risk
@@ -75,11 +77,16 @@ Mild — client code currently does not check for errors from these endpoints, s
 - Websocket payloads are raw MediaPipe shapes consumed by four layers independently.
 - Recording produces duplicate saves (WS MP4 + REST .mov) with format/extension mismatch.
 - Frontend ignores websocket completion messages (`dtw_saved`, `complete`, `dtw_error`, `status`).
+- The websocket `dtw_saved` message currently drops the saved `session_id` even though `save_dtw_npz()` produces one.
+- Retakes currently reuse the same route-level `testId`, so multiple takes can write into the same DTW folder.
+- The published patient test-history contract now advertises `test_id`, `fps`, `summary_available`, and `dtw.session_id`, but the live writer still does not populate them.
 
 ### Target
 - Choose one canonical DTW session id and use it in: artifact folders, meta.json, test history, REST responses, frontend routes.
+- Ensure every recording attempt gets a fresh canonical session id so retakes never overwrite prior artifacts.
 - Persist patient-to-session linkage explicitly (add `patient_id` to meta.json or store the relationship in SQL).
 - Define a stable websocket payload contract for overlay keypoints, including one documented schema consumed by both DTW extraction and frontend rendering.
+- Restore websocket completion contracts so `dtw_saved` returns the canonical session id and artifact refs, and test history stores the same id.
 - The frontend summary page queries sessions by patient, not by test-only heuristics.
 
 ### Questions to settle
@@ -87,10 +94,12 @@ Mild — client code currently does not check for errors from these endpoints, s
 2. **Persistence**: Should DTW session metadata live in SQL alongside the patient, or remain file-based?
 3. **Payload contract**: Should the websocket expose raw landmarks, normalized landmarks (wrist-centered, scaled), or both?
 4. **Recording**: Keep both WS and REST upload, or switch to a single save path?
+5. **Take identity**: Should the backend mint a per-attempt session id, or should the frontend request one before recording starts?
 
 ### Verification
 - Fresh test recording produces exactly one recording file, not two.
 - A single session id is returned by: websocket `dtw_saved`, `GET /patients/{id}/tests`, and `GET /dtw/sessions/lookup/{id}`.
+- Retaking the same test creates a new session id and leaves the prior DTW artifacts intact.
 - VideoSummary resolves the correct DTW session for any historical test entry.
 - Frontend overlay and backend DTW extraction consume from a shared payload type.
 
@@ -131,6 +140,7 @@ The audit already identified specific files that should not be treated as author
 | `backend/repo/patient_repository.py::add_test_result()` | Stale against current `TestResult` model |
 | `backend/patient_manager.py` comment about SQL migration | Aspirational, not reflected in runtime |
 | Unused imports (e.g., `TestResultRepository` in `patient_manager.py`) | Imported but never called |
+| `backend/legacy/history_manager.py` | Archived duplicate; active code imports `TestHistoryManager` from `patient_manager.py` |
 
 ### Target
 - Remove or archive confirmed dead paths after Phases 1–3 have established replacements.

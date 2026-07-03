@@ -1,27 +1,18 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
-
-import os
+from fastapi import WebSocket, WebSocketDisconnect
 import base64
 import json
 from datetime import datetime
 from pathlib import Path
-import uuid
 
 
 import numpy as np
 from typing import List, Optional, Dict
-from routes.utils_dtw import EndOnlyDTW, normalize_test_name
-from storage_paths import RECORDINGS_DIR
-
-from patient_manager import (
-    TestHistoryManager
-)
+from routes.utils_dtw import EndOnlyDTW, normalize_test_name, generate_session_id
+from services.recording_service import save_frames_to_mp4
+from services.test_history_service import append_patient_test, build_completed_test_history_entry
 from fastapi import APIRouter
 
 router = APIRouter(prefix="/ws", tags=["websockets"])
-
-RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Resolve model files relative to this file: backend/models/
 _MODELS_DIR = Path(__file__).resolve().parent.parent / "models"
@@ -53,34 +44,6 @@ def _decode_base64_image(data_str: str) -> np.ndarray:
     if frame is None:
         raise ValueError("Could not decode frame from provided data.")
     return frame
-
-def _save_frames_to_mp4(frames: List[np.ndarray], fps: float = 30.0) -> str:
-    if not frames:
-        raise ValueError("No frames to save.")
-
-    cv2 = _cv2()
-    h, w = frames[0].shape[:2]
-
-    recording_id = str(uuid.uuid4())
-    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    filename = f"ws_recording_{ts}_{recording_id}.mp4"
-    path = RECORDINGS_DIR / filename
-
-    # Try H.264 first, fall back to mp4v if unavailable
-    for fourcc_str in ("avc1", "H264", "mp4v"):
-        fourcc = cv2.VideoWriter_fourcc(*fourcc_str)
-        writer = cv2.VideoWriter(str(path), fourcc, fps, (w, h))
-        if writer.isOpened():
-            print("Using fourcc:", fourcc_str)
-            break
-    else:
-        raise RuntimeError("Could not open VideoWriter with any codec")
-
-    for f in frames:
-        writer.write(f)
-    writer.release()
-    return filename
-
 
 # ============ MediaPipe extractor (Tasks API — mediapipe >= 0.10) ============
 class MPExtractor:
@@ -189,7 +152,8 @@ async def _camera_ws_handler(websocket: WebSocket):
     fps_hint: float = 30.0
     patient_id: Optional[str] = None
     test_name: Optional[str] = None
-    test_id: Optional[str] = None
+    client_test_id: Optional[str] = None
+    session_id: Optional[str] = None
     model: str = "hands"      # "hands" | "pose"
     started: bool = False
 
@@ -209,9 +173,10 @@ async def _camera_ws_handler(websocket: WebSocket):
                     test_name = normalize_test_name(raw_test)          # canonicalize
                     model = data.get("model", model)                   # "hands" | "pose"
                     fps_hint = float(data.get("fps", fps_hint))
-                    test_id = data.get("testId")     # unique per test run
+                    client_test_id = data.get("testId")
+                    session_id = generate_session_id()
                     mp_extractor = MPExtractor(model=model)
-                    dtw_end = EndOnlyDTW(test_name or "unknown", model, test_id)
+                    dtw_end = EndOnlyDTW(test_name or "unknown", model, session_id)
 
                     # Surface template init errors immediately
                     if getattr(dtw_end, "init_error", None):
@@ -229,6 +194,8 @@ async def _camera_ws_handler(websocket: WebSocket):
                         "status": "initialized",
                         "patientId": patient_id,
                         "testName": test_name,  # canonical test
+                        "testId": client_test_id,
+                        "sessionId": session_id,
                         "model": model,
                         "fps": fps_hint
                     })
@@ -281,37 +248,72 @@ async def _camera_ws_handler(websocket: WebSocket):
                         "type": "dtw_error",
                         **payload,
                         "testName": test_name,
+                        "sessionId": session_id,
                         "model": model,
                     })
                 else:
-                    await websocket.send_json({"type": "dtw_saved", **payload})
+                    await websocket.send_json({
+                        "type": "dtw_saved",
+                        "patientId": patient_id,
+                        "testName": test_name,
+                        "sessionId": payload.get("session_id") or session_id,
+                        "artifacts": payload.get("artifacts"),
+                        "distance": payload.get("distance"),
+                        "avgStepCost": payload.get("avg_step_cost"),
+                        "similarity": payload.get("similarity_overall"),
+                        "similarityPos": payload.get("similarity_pos"),
+                        "similarityAmp": payload.get("similarity_amp"),
+                        "similaritySpd": payload.get("similarity_spd"),
+                    })
 
-                # Save MP4 & history (optional)
+                # Save MP4 & history
                 try:
-                    saved_name = _save_frames_to_mp4(frames, fps=fps_hint)
+                    saved_name = save_frames_to_mp4(
+                        frames,
+                        fps=fps_hint,
+                        patient_id=patient_id,
+                        test_name=test_name,
+                        session_id=session_id,
+                    )
                 except Exception as e:
                     await websocket.send_json({"type": "error", "where": "save_mp4", "message": f"{e}"})
                     frames = []
                     continue
 
                 try:
-                    thm = TestHistoryManager()
-                    thm.add_patient_test(patient_id or "unknown", {
-                        "test_name": test_name or "unknown",
-                        "date": datetime.utcnow().isoformat(),
-                        "recording_file": saved_name,
-                        "frame_count": len(frames)
-                    })
+                    entry = build_completed_test_history_entry(
+                        test_name=test_name or "unknown",
+                        session_id=payload.get("session_id") or session_id or client_test_id or "unknown",
+                        recording_file=saved_name,
+                        frame_count=len(frames),
+                        fps=fps_hint,
+                        similarity=payload.get("similarity_overall") if payload.get("ok") else None,
+                        distance=payload.get("distance") if payload.get("ok") else None,
+                        avg_step_cost=payload.get("avg_step_cost") if payload.get("ok") else None,
+                        model=model,
+                        artifacts=payload.get("artifacts") if payload.get("ok") else None,
+                    )
+                    append_patient_test(patient_id or "unknown", entry)
                 except Exception:
                     pass
 
                 await websocket.send_json({
                     "type": "complete",
+                    "sessionId": payload.get("session_id") or session_id,
                     "recording": saved_name,
                     "path": f"recordings/{saved_name}",
                     "frame_count": len(frames),
                     "patientId": patient_id,
-                    "testName": test_name
+                    "testName": test_name,
+                    "fps": fps_hint,
+                    "summaryAvailable": bool(payload.get("ok")),
+                    "dtw": {
+                        "session_id": payload.get("session_id") or session_id,
+                        "distance": payload.get("distance") if payload.get("ok") else None,
+                        "avg_step_cost": payload.get("avg_step_cost") if payload.get("ok") else None,
+                        "similarity": payload.get("similarity_overall") if payload.get("ok") else None,
+                        "artifacts": payload.get("artifacts") if payload.get("ok") else None,
+                    },
                 })
                 frames = []
 
