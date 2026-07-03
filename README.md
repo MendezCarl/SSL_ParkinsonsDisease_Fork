@@ -1,4 +1,4 @@
-# Welcome to your Lovable project
+# Welcome to our Parkinson's Assessment Project
 
 ## Project info
 
