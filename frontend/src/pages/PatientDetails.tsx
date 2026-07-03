@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import {
   ArrowLeft,
@@ -24,7 +24,8 @@ import {
   TestIndicator,
 } from "@/types/patient";
 import { getSeverityColor, calculateAge } from "@/lib/utils";
-import apiService from "@/services/api";
+import { addPatientDoctorNote, addPatientLabResult, getPatient } from "@/services/patients";
+import { getPatientTests } from "@/services/tests";
 import {
   Dialog,
   DialogContent,
@@ -67,13 +68,17 @@ const testTypeStyles: Record<
     container: "border-l-4 border-l-amber-500/80 bg-amber-50/40",
     badge: "border border-amber-200 bg-amber-100 text-amber-700",
   },
+  unknown: {
+    container: "border-l-4 border-l-slate-500/80 bg-slate-50/40",
+    badge: "border border-slate-200 bg-slate-100 text-slate-700",
+  },
 };
 
 // ---------- Date helpers ----------
 const isValidDate = (d: unknown): d is Date =>
   d instanceof Date && !Number.isNaN(d.getTime());
 const toISO = (v: unknown): string => {
-  const d = v instanceof Date ? v : new Date(v as any);
+  const d = v instanceof Date ? v : new Date(typeof v === 'string' || typeof v === 'number' ? v : Date.now());
   return isValidDate(d) ? d.toISOString() : new Date().toISOString();
 };
 
@@ -85,8 +90,6 @@ const PatientDetails = () => {
   const [tests, setTests] = useState<Test[]>([]); // Placeholder – replace with real API if available
   const [testsLoading, setTestsLoading] = useState(true);
   const [testSearch, setTestSearch] = useState("");
-  const [isEditOpen, setIsEditOpen] = useState(false);
-  const [editData, setEditData] = useState<Partial<Patient>>({});
   const [isLabResultModalOpen, setIsLabResultModalOpen] = useState(false);
   const [isDoctorNoteModalOpen, setIsDoctorNoteModalOpen] = useState(false);
   const [newLabResult, setNewLabResult] = useState("");
@@ -115,29 +118,6 @@ const PatientDetails = () => {
     });
   }, [sortedTests, testSearch]);
 
-  const openForEdit = useCallback(() => {
-    if (!patient) return;
-    setEditData({
-      firstName: patient.firstName ?? "",
-      lastName: patient.lastName ?? "",
-      birthDate: patient.birthDate ?? "",
-      height: patient.height ?? "",
-      weight: patient.weight ?? "",
-      labResults: patient.labResults ?? "",
-      doctorNotes: patient.doctorNotes ?? "",
-      severity: (patient.severity as Patient["severity"]) ?? "Stage 1",
-    });
-    setIsEditOpen(true);
-  }, [patient]);
-
-  const handleEditSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!patient) return;
-    const updated: Patient = { ...patient, ...editData } as Patient;
-    setPatient(updated);
-    setIsEditOpen(false);
-  };
-
   // --- Send ONE lab result per submit (optimistic UI + rollback) ---
   const handleAddLabResult = async () => {
     if (!patient || !newLabResult.trim()) return;
@@ -165,7 +145,7 @@ const PatientDetails = () => {
     setIsLabResultModalOpen(false);
 
     try {
-      const response = await apiService.addPatientLabResult(patient.id, {
+      const response = await addPatientLabResult(patient.id, {
         id: entryId,
         date: toISO(newEntry.date),
         added_by: newEntry.addedBy ?? "Unknown",
@@ -215,7 +195,7 @@ const PatientDetails = () => {
     setIsDoctorNoteModalOpen(false);
 
     try {
-      const response = await apiService.addPatientDoctorNote(patient.id, {
+      const response = await addPatientDoctorNote(patient.id, {
         id: entryId,
         date: toISO(newEntry.date),
         note: noteText,
@@ -244,7 +224,7 @@ const PatientDetails = () => {
       }
 
       try {
-        const response = await apiService.getPatient(id);
+        const response = await getPatient(id);
         if (!response.success || !response.data) {
           throw new Error(response.error || 'Failed to fetch patient');
         }
@@ -252,8 +232,8 @@ const PatientDetails = () => {
         setPatient(response.data);
 
         setTests([]);
-      } catch (err: any) {
-        setError(err.message);
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : 'Failed to fetch patient');
       } finally {
         setLoading(false);
       }
@@ -270,7 +250,7 @@ const PatientDetails = () => {
       setTestsLoading(true);
       setTests([]);
       try {
-        const response = await apiService.getPatientTests(id);
+        const response = await getPatientTests(id);
         if (cancelled) return;
         if (response.success && response.data) {
           setTests(response.data);
@@ -323,7 +303,7 @@ const PatientDetails = () => {
         <div className="container mx-auto px-6 py-6">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-4">
-              <Link to="/">
+              <Link to="/patients">
                 <Button variant="outline" size="sm">
                   <ArrowLeft className="mr-2 h-4 w-4" />
                   Back to Patients
@@ -339,17 +319,19 @@ const PatientDetails = () => {
               </div>
             </div>
             <div className="flex items-center space-x-3">
-              <Button variant="outline" onClick={openForEdit}>
-                <Edit className="mr-2 h-4 w-4" />
-                Edit Patient
-              </Button>
+              <Link to={`/patients/${id}/edit`}>
+                <Button variant="outline">
+                  <Edit className="mr-2 h-4 w-4" />
+                  Edit Patient
+                </Button>
+              </Link>
               <Link to={`/patients/${id}/timeline`}>
                 <Button variant="outline">
                   <TrendingUp className="mr-2 h-4 w-4" />
                   View Timeline
                 </Button>
               </Link>
-              <Link to={`/patient/${id}/test-selection`}>
+              <Link to={`/patients/${id}/test-selection`}>
                 <Button className="bg-primary hover:bg-primary-hover">
                   <Plus className="mr-2 h-4 w-4" />
                   New Test
@@ -614,7 +596,7 @@ const PatientDetails = () => {
                           <div className="mt-3 flex flex-wrap gap-2">
                             {test.summaryAvailable && (
                               <Link
-                                to={`/patient/${id}/video-summary/${encodeURIComponent(
+                                to={`/patients/${id}/video-summary/${encodeURIComponent(
                                   test.id
                                 )}`}
                               >
@@ -660,7 +642,7 @@ const PatientDetails = () => {
                       <p className="text-sm text-muted-foreground">
                         No tests recorded yet
                       </p>
-                      <Link to={`/patient/${id}/test-selection`}>
+                      <Link to={`/patients/${id}/test-selection`}>
                         <Button size="sm" className="mt-3">
                           <Plus className="mr-2 h-3 w-3" />
                           Create First Test
@@ -674,132 +656,6 @@ const PatientDetails = () => {
           </div>
         </div>
       </div>
-
-      {/* Edit Patient pop up*/}
-      <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
-        <DialogContent aria-describedby={undefined}>
-          <DialogHeader>
-            <DialogTitle className="mb-4 text-lg font-semibold">
-              Edit Patient Details
-            </DialogTitle>
-          </DialogHeader>
-          <form onSubmit={handleEditSubmit} className="space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <Label htmlFor="firstName">First Name</Label>
-                <Input
-                  id="firstName"
-                  value={editData.firstName ?? ""}
-                  onChange={(e) =>
-                    setEditData((d) => ({ ...d, firstName: e.target.value }))
-                  }
-                />
-              </div>
-              <div>
-                <Label htmlFor="lastName">Last Name</Label>
-                <Input
-                  id="lastName"
-                  value={editData.lastName ?? ""}
-                  onChange={(e) =>
-                    setEditData((d) => ({ ...d, lastName: e.target.value }))
-                  }
-                />
-              </div>
-              <div>
-                <Label htmlFor="birthDate">Birthdate</Label>
-                <Input
-                  id="birthDate"
-                  type="date"
-                  value={editData.birthDate ?? ""}
-                  onChange={(e) =>
-                    setEditData((d) => ({ ...d, birthDate: e.target.value }))
-                  }
-                />
-              </div>
-              <div>
-                <Label htmlFor="severity">Severity</Label>
-                <Select
-                  value={editData.severity ?? "Stage 1"}
-                  onValueChange={(v) =>
-                    setEditData((d) => ({
-                      ...d,
-                      severity: v as Patient["severity"],
-                    }))
-                  }
-                >
-                  <SelectTrigger id="severity">
-                    <SelectValue placeholder="Select severity" />
-                  </SelectTrigger>
-                  <SelectContent position="popper" className="z-[60]">
-                    <SelectItem value="Stage 1">Stage 1</SelectItem>
-                    <SelectItem value="Stage 2">Stage 2</SelectItem>
-                    <SelectItem value="Stage 3">Stage 3</SelectItem>
-                    <SelectItem value="Stage 4">Stage 4</SelectItem>
-                    <SelectItem value="Stage 5">Stage 5</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label htmlFor="height">Height</Label>
-                <Input
-                  id="height"
-                  placeholder="e.g., 170 cm"
-                  value={editData.height ?? ""}
-                  onChange={(e) =>
-                    setEditData((d) => ({ ...d, height: e.target.value }))
-                  }
-                />
-              </div>
-              <div>
-                <Label htmlFor="weight">Weight</Label>
-                <Input
-                  id="weight"
-                  placeholder="e.g., 70 kg"
-                  value={editData.weight ?? ""}
-                  onChange={(e) =>
-                    setEditData((d) => ({ ...d, weight: e.target.value }))
-                  }
-                />
-              </div>
-            </div>
-
-            <div>
-              <Label htmlFor="labResults">Lab Results</Label>
-              <Textarea
-                id="labResults"
-                rows={3}
-                value={editData.labResults ?? ""}
-                onChange={(e) =>
-                  setEditData((d) => ({ ...d, labResults: e.target.value }))
-                }
-              />
-            </div>
-
-            <div>
-              <Label htmlFor="doctorNotes">Doctor Notes</Label>
-              <Textarea
-                id="doctorNotes"
-                rows={4}
-                value={editData.doctorNotes ?? ""}
-                onChange={(e) =>
-                  setEditData((d) => ({ ...d, doctorNotes: e.target.value }))
-                }
-              />
-            </div>
-
-            <div className="flex justify-end gap-2 pt-2">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setIsEditOpen(false)}
-              >
-                Cancel
-              </Button>
-              <Button type="submit">Save</Button>
-            </div>
-          </form>
-        </DialogContent>
-      </Dialog>
 
       {/* Lab Result Modal */}
       <Dialog

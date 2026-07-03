@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useCallback } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import {
   ArrowLeft,
@@ -26,7 +26,8 @@ import {
 } from "@/components/ui/select";
 import { Patient, Test, LabResultEntry, DoctorNoteEntry } from "@/types/patient";
 import { getSeverityColor, calculateAge } from "@/lib/utils";
-import apiService from "@/services/api";
+import { getPatient } from "@/services/patients";
+import { getPatientTests } from "@/services/tests";
 import { useToast } from "@/hooks/use-toast";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 
@@ -40,6 +41,13 @@ interface TimelineEvent {
   severity?: string;
 }
 
+type TrendPoint = {
+  index: number;
+  date: string;
+  similarity: number;
+  distance: number;
+};
+
 export default function Timeline() {
   const { patientId } = useParams<{ patientId: string }>();
   const navigate = useNavigate();
@@ -50,19 +58,14 @@ export default function Timeline() {
   const [filterType, setFilterType] = useState<"all" | "test" | "lab_result" | "doctor_note">("all");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
 
-  useEffect(() => {
-    if (!patientId) return;
-    loadData();
-  }, [patientId]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     if (!patientId) return;
     
     setLoading(true);
     try {
       const [patientResponse, testsResponse] = await Promise.all([
-        apiService.getPatient(patientId),
-        apiService.getPatientTests(patientId),
+        getPatient(patientId),
+        getPatientTests(patientId),
       ]);
 
       if (patientResponse.success && patientResponse.data) {
@@ -94,7 +97,12 @@ export default function Timeline() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [patientId, toast]);
+
+  useEffect(() => {
+    if (!patientId) return;
+    void loadData();
+  }, [patientId, loadData]);
 
   // Combine all events into a timeline
   const timelineEvents = useMemo(() => {
@@ -157,7 +165,7 @@ export default function Timeline() {
       testsByType[test.type].push(test);
     });
 
-    const trends: Record<string, { data: any[], trend: "up" | "down" | "stable" }> = {};
+    const trends: Record<string, { data: TrendPoint[]; trend: "up" | "down" | "stable" }> = {};
 
     Object.entries(testsByType).forEach(([type, typeTests]) => {
       const sorted = [...typeTests].sort((a, b) => a.date.getTime() - b.date.getTime());
@@ -249,7 +257,7 @@ export default function Timeline() {
       {/* Header */}
       <div className="mb-6">
         <Button variant="ghost" asChild className="mb-4">
-          <Link to={`/patient/${patientId}`}>
+          <Link to={`/patients/${patientId}`}>
             <ArrowLeft className="mr-2 h-4 w-4" />
             Back to Patient Details
           </Link>
@@ -286,7 +294,7 @@ export default function Timeline() {
               <div className="flex justify-between items-center">
                 <CardTitle>Patient Timeline</CardTitle>
                 <div className="flex gap-2">
-                  <Select value={filterType} onValueChange={(value: any) => setFilterType(value)}>
+                  <Select value={filterType} onValueChange={(value) => setFilterType(value as typeof filterType)}>
                     <SelectTrigger className="w-[180px]">
                       <SelectValue placeholder="Filter by type" />
                     </SelectTrigger>
@@ -297,7 +305,7 @@ export default function Timeline() {
                       <SelectItem value="doctor_note">Doctor Notes Only</SelectItem>
                     </SelectContent>
                   </Select>
-                  <Select value={sortOrder} onValueChange={(value: any) => setSortOrder(value)}>
+                  <Select value={sortOrder} onValueChange={(value) => setSortOrder(value as typeof sortOrder)}>
                     <SelectTrigger className="w-[180px]">
                       <SelectValue placeholder="Sort order" />
                     </SelectTrigger>
@@ -538,7 +546,12 @@ export default function Timeline() {
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
-                {["finger-tapping", "stand-and-sit", "fist-open-close"].map((type) => {
+                {[
+                  'finger-tapping',
+                  'stand-and-sit',
+                  'fist-open-close',
+                  ...(tests.some((t) => t.type === 'unknown') ? ['unknown'] : []),
+                ].map((type) => {
                   const typeTests = tests.filter((t) => t.type === type);
                   const completedTests = typeTests.filter((t) => t.status === "completed");
                   const avgSimilarity =

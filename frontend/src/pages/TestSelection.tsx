@@ -7,7 +7,8 @@ import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { useToast } from '@/hooks/use-toast';
 import { Patient, Test, AVAILABLE_TESTS, TestIndicator } from '@/types/patient';
-import apiService from '@/services/api';
+import { getPatient } from '@/services/patients';
+import { getPatientTests } from '@/services/tests';
 import { getSeverityColor, calculateAge } from '@/lib/utils';
 import { Input } from '@/components/ui/input';
 import {
@@ -37,6 +38,10 @@ const testTypeStyles: Record<Test['type'], { container: string; badge: string }>
   'fist-open-close': {
     container: 'border-l-4 border-l-amber-500/80 bg-amber-50/40',
     badge: 'border border-amber-200 bg-amber-100 text-amber-700',
+  },
+  unknown: {
+    container: 'border-l-4 border-l-slate-500/80 bg-slate-50/40',
+    badge: 'border border-slate-200 bg-slate-100 text-slate-700',
   },
 };
 
@@ -82,8 +87,8 @@ const TestSelection = () => {
       setLoadingPatient(true);
       try {
         const [patientRes, testsRes] = await Promise.all([
-          apiService.getPatient(id),
-          apiService.getPatientTests(id),
+          getPatient(id),
+          getPatientTests(id),
         ]);
 
         // patient
@@ -95,22 +100,10 @@ const TestSelection = () => {
 
         // tests
         if (testsRes.success && testsRes.data) {
-          const normalized: Test[] = testsRes.data.map((t: any) => ({
-            id: String(t.test_id),
-            patientId: t.patient_id,
-            name: t.test_name ?? 'Unknown test',
-            // backend stores the concrete name (e.g. "stand-and-sit")
-            // so we can reuse it as the union; fallback to 'stand-and-sit'
-            type: (t.test_name as 'stand-and-sit' | 'palm-open') ?? 'stand-and-sit',
-            date: t.test_date ? new Date(t.test_date) : new Date(),
-            status: t.recording_file ? 'completed' : 'pending',
-            videoUrl: t.recording_file,
-            results: t.keypoints ? { raw: t.keypoints } as any : undefined,
-          }));
-          setTestHistory(normalized);
+          setTestHistory(testsRes.data);
         }
-      } catch (err: any) {
-        setError(err.message || 'Failed to connect to server');
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : 'Failed to connect to server');
       } finally {
         setLoadingPatient(false);
       }
@@ -137,7 +130,7 @@ const TestSelection = () => {
       return;
     }
     setSelectedFile(file); //this stores the selected file in a state
-    navigate(`/patient/${id}/video-summary`, {
+    navigate(`/patients/${id}/video-summary`, {
       state: { file, selectedTests },
     });
   }
@@ -163,7 +156,7 @@ const TestSelection = () => {
     }
 
     const testId = `test-${Date.now()}`;
-    navigate(`/patient/${id}/video-recording/${testId}`, {
+    navigate(`/patients/${id}/video-recording/${testId}`, {
     state: { selectedTests },
   });
   }
@@ -185,7 +178,7 @@ const TestSelection = () => {
         <div className="container mx-auto px-6 py-6">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-4">
-              <Link to={`/patient/${id}`}>
+              <Link to={`/patients/${id}`}>
                 <Button variant="outline" size="sm">
                   <ArrowLeft className="mr-2 h-4 w-4" />
                   Back to Patient
@@ -241,9 +234,7 @@ const TestSelection = () => {
                 <p className="text-sm font-medium text-muted-foreground mb-2">Recent Notes</p>
                 <div className="bg-muted p-3 rounded-md">
                   <p className="text-sm">
-                    {Array.isArray(patient.doctorNotes)
-                      ? patient.doctorNotes[0]?.note ?? 'No recent notes'
-                      : (patient.doctorNotes as any)?.note ?? patient.doctorNotes ?? 'No recent notes'}
+                    {patient.doctorNotes || 'No recent notes'}
                   </p>
                 </div>
               </div>
@@ -319,7 +310,7 @@ const TestSelection = () => {
                           </div>
                           <div className="mt-2 flex flex-wrap gap-2">
                             {test.summaryAvailable && (
-                              <Link to={`/patient/${id}/video-summary/${encodeURIComponent(test.id)}`}>
+                              <Link to={`/patients/${id}/video-summary/${encodeURIComponent(test.id)}`}>
                                 <Button size="sm" variant="outline">
                                   View Results
                                 </Button>

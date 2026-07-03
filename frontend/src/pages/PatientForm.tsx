@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { ArrowLeft, Save, User, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -9,7 +9,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
 import { Patient } from '@/types/patient';
-import apiService, { normalizeBirthDate } from '@/services/api';
+import { addPatientDoctorNote, addPatientLabResult, createPatient, getPatient, updatePatient } from '@/services/patients';
+import { normalizeBirthDate } from '@/services/patient-mappers';
 import { calculateAge } from '@/lib/utils';
 
 const PatientForm = () => {
@@ -17,6 +18,7 @@ const PatientForm = () => {
   const { id } = useParams<{ id: string }>();
   const { toast } = useToast();
   const isEditing = !!id;
+  const [originalPatient, setOriginalPatient] = useState<Patient | null>(null);
 
   const [formData, setFormData] = useState({
     firstName: "",
@@ -42,18 +44,12 @@ const PatientForm = () => {
     setFormData(prev => ({ ...prev, [field]: value }));
   };
 
-  // Load patient data if editing
-  useEffect(() => {
-    if (isEditing && id) {
-      loadPatientData();
-    }
-  }, [isEditing, id]);
-
-  const loadPatientData = async () => {
+  const loadPatientData = useCallback(async () => {
     try {
-      const response = await apiService.getPatient(id!);
+      const response = await getPatient(id!);
       if (response.success && response.data) {
         const patient = response.data;
+        setOriginalPatient(patient);
         setFormData({
           firstName: patient.firstName,
           lastName: patient.lastName,
@@ -73,7 +69,14 @@ const PatientForm = () => {
         variant: "destructive",
       });
     }
-  };
+  }, [id, toast]);
+
+  // Load patient data if editing
+  useEffect(() => {
+    if (isEditing && id) {
+      void loadPatientData();
+    }
+  }, [isEditing, id, loadPatientData]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -82,7 +85,6 @@ const PatientForm = () => {
     if (
       !formData.firstName ||
       !formData.lastName ||
-      !formData.recordNumber ||
       !formData.birthDate ||
       !formData.severity
     ) {
@@ -110,7 +112,6 @@ const PatientForm = () => {
       const patientData = {
         firstName: formData.firstName,
         lastName: formData.lastName,
-        recordNumber: formData.recordNumber,
         birthDate: normalizedBirthDate,
         height: formData.height || '170 cm',
         weight: formData.weight || '70 kg',
@@ -121,26 +122,57 @@ const PatientForm = () => {
         updatedAt: new Date(),
       };
 
-      console.log("Saving patient with data:", patientData);
-      console.log("Is editing:", isEditing, "ID:", id);
-
       let response;
       if (isEditing && id) {
-        response = await apiService.updatePatient(id, patientData);
+        response = await updatePatient(id, patientData);
       } else {
-        response = await apiService.createPatient(patientData);
+        response = await createPatient(patientData);
       }
-
-      console.log("API response:", response);
-
       if (response.success) {
+        const supplementalErrors: string[] = [];
+
+        if (isEditing && id && originalPatient) {
+          const originalLabResults = originalPatient.labResults.trim();
+          const nextLabResults = formData.labResults.trim();
+          if (nextLabResults && nextLabResults !== originalLabResults) {
+            const labResponse = await addPatientLabResult(id, {
+              id: `lab_${Date.now()}`,
+              date: new Date().toISOString(),
+              results: nextLabResults,
+              added_by: 'System Form Update',
+            });
+            if (!labResponse.success) {
+              supplementalErrors.push('lab results');
+            }
+          }
+
+          const originalDoctorNotes = originalPatient.doctorNotes.trim();
+          const nextDoctorNotes = formData.doctorNotes.trim();
+          if (nextDoctorNotes && nextDoctorNotes !== originalDoctorNotes) {
+            const noteResponse = await addPatientDoctorNote(id, {
+              id: `note_${Date.now()}`,
+              date: new Date().toISOString(),
+              note: nextDoctorNotes,
+              added_by: 'System Form Update',
+            });
+            if (!noteResponse.success) {
+              supplementalErrors.push("doctor's notes");
+            }
+          }
+        }
+
         toast({
-          title: isEditing ? "Patient Updated" : "Patient Created",
-          description: `${formData.firstName} ${formData.lastName} has been ${
-            isEditing ? "updated" : "added"
-          } successfully.`,
+          title: supplementalErrors.length === 0
+            ? isEditing ? "Patient Updated" : "Patient Created"
+            : "Patient Updated With Warnings",
+          description: supplementalErrors.length === 0
+            ? `${formData.firstName} ${formData.lastName} has been ${
+                isEditing ? "updated" : "added"
+              } successfully.`
+            : `${formData.firstName} ${formData.lastName} was saved, but ${supplementalErrors.join(' and ')} could not be appended.`,
+          variant: supplementalErrors.length === 0 ? 'default' : 'destructive',
         });
-        navigate(isEditing ? `/patient/${id}` : "/");
+        navigate(isEditing ? `/patients/${id}` : "/patients");
       } else {
         toast({
           title: "Error",
@@ -167,7 +199,7 @@ const PatientForm = () => {
         <div className="container mx-auto px-6 py-6">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-4">
-              <Link to={isEditing ? `/patient/${id}` : "/"}>
+              <Link to={isEditing ? `/patients/${id}` : "/patients"}>
                 <Button variant="outline" size="sm">
                   <ArrowLeft className="mr-2 h-4 w-4" />
                   {isEditing ? "Back to Patient" : "Back to Patients"}
@@ -229,16 +261,19 @@ const PatientForm = () => {
                   </div>
 
                   <div className="space-y-2">
-                    <Label htmlFor="recordNumber">Record Number *</Label>
+                    <Label htmlFor="recordNumber">Record Number</Label>
                     <Input
                       id="recordNumber"
-                      placeholder="e.g., P001"
+                      placeholder={isEditing ? undefined : "Assigned automatically after creation"}
                       value={formData.recordNumber}
-                      onChange={(e) =>
-                        handleInputChange("recordNumber", e.target.value)
-                      }
-                      required
+                      readOnly
+                      disabled
                     />
+                    <p className="text-xs text-muted-foreground">
+                      {isEditing
+                        ? "Record numbers are assigned by the system and remain stable."
+                        : "A unique chronological record number will be generated after the patient is created."}
+                    </p>
                   </div>
 
                   <div className="space-y-2">
@@ -321,6 +356,11 @@ const PatientForm = () => {
                     }
                     rows={3}
                   />
+                  {isEditing && (
+                    <p className="text-xs text-muted-foreground">
+                      Updating this field appends a new latest lab result entry when the value changes.
+                    </p>
+                  )}
                 </div>
 
                 {/* Doctor's Notes */}
@@ -335,11 +375,16 @@ const PatientForm = () => {
                     }
                     rows={4}
                   />
+                  {isEditing && (
+                    <p className="text-xs text-muted-foreground">
+                      Updating this field appends a new latest doctor's note entry when the value changes.
+                    </p>
+                  )}
                 </div>
 
                 {/* Submit Button */}
                 <div className="flex justify-end space-x-4 pt-6">
-                  <Link to={isEditing ? `/patient/${id}` : "/"}>
+                  <Link to={isEditing ? `/patients/${id}` : "/patients"}>
                     <Button variant="outline" disabled={loading}>
                       Cancel
                     </Button>

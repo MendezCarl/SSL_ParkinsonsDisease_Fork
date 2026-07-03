@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import apiService from '@/services/api';
+import { getHealthStatus } from '@/services/auth';
 
 export const useApiStatus = () => {
   const [isConnected, setIsConnected] = useState<boolean | null>(null);
@@ -8,13 +8,8 @@ export const useApiStatus = () => {
   const checkConnection = async () => {
     setIsChecking(true);
     try {
-      const healthResponse = await apiService.getHealthStatus();
-      if (healthResponse.success) {
-        const response = await apiService.getPatients(0, 1);
-        setIsConnected(response.success);
-      } else {
-        setIsConnected(false);
-      }
+      const healthResponse = await getHealthStatus();
+      setIsConnected(healthResponse.success);
     } catch (error) {
       setIsConnected(false);
     } finally {

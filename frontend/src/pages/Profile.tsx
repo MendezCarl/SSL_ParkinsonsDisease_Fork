@@ -70,7 +70,7 @@ const Profile = () => {
                 <CardTitle className="text-2xl">Profile Settings</CardTitle>
                 <CardDescription>Viewing account information from the backend.</CardDescription>
               </div>
-              <Button onClick={() => navigate('/')}>
+              <Button onClick={() => navigate('/patients')}>
                 <Check className="mr-2 h-4 w-4" />
                 Done
               </Button>

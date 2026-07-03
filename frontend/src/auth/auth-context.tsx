@@ -1,5 +1,5 @@
-import { ReactNode, createContext, useContext, useEffect, useMemo, useState } from 'react';
-import apiService from '@/services/api';
+import { ReactNode, createContext, useContext, useEffect, useMemo, useState, useCallback } from 'react';
+import { getCurrentUser, login as loginRequest } from '@/services/auth';
 import {
   AuthSession,
   AuthUser,
@@ -24,19 +24,19 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [session, setSession] = useState<AuthSession | null>(() => getStoredAuthSession());
   const [isLoading, setIsLoading] = useState(true);
 
-  const logout = () => {
+  const logout = useCallback(() => {
     clearStoredAuthSession();
     setSession(null);
-  };
+  }, []);
 
-  const refreshUser = async () => {
+  const refreshUser = useCallback(async () => {
     const stored = getStoredAuthSession();
     if (!stored?.token) {
       setIsLoading(false);
       return;
     }
 
-    const response = await apiService.getCurrentUser();
+    const response = await getCurrentUser();
     if (response.success && response.data) {
       const nextSession = { token: stored.token, user: response.data };
       setStoredAuthSession(nextSession);
@@ -45,19 +45,19 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       logout();
     }
     setIsLoading(false);
-  };
+  }, [logout]);
 
   useEffect(() => {
-    refreshUser();
-  }, []);
+    void refreshUser();
+  }, [refreshUser]);
 
-  const login = async (username: string, password: string) => {
-    const loginResponse = await apiService.login(username, password);
+  const login = useCallback(async (username: string, password: string) => {
+    const loginResponse = await loginRequest(username, password);
     if (!loginResponse.success || !loginResponse.data) {
       return { success: false, error: loginResponse.error || 'Login failed' };
     }
 
-    const userResponse = await apiService.getCurrentUser(loginResponse.data.accessToken);
+    const userResponse = await getCurrentUser(loginResponse.data.accessToken);
     if (!userResponse.success || !userResponse.data) {
       clearStoredAuthSession();
       return { success: false, error: userResponse.error || 'Failed to load user profile' };
@@ -70,7 +70,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     setStoredAuthSession(nextSession);
     setSession(nextSession);
     return { success: true };
-  };
+  }, []);
 
   const value = useMemo<AuthContextValue>(
     () => ({
@@ -82,7 +82,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       logout,
       refreshUser,
     }),
-    [session, isLoading]
+    [session, isLoading, login, logout, refreshUser]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

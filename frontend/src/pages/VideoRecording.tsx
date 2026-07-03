@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams, useNavigate, Link, useLocation } from "react-router-dom";
 import {
   ArrowLeft,
@@ -14,10 +14,15 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
 import { AVAILABLE_TESTS } from "@/types/patient";
-import { apiService } from "@/services/api";
+import { uploadVideo } from "@/services/uploads";
 
 type MPHandPoint = { x: number; y: number; z?: number };
 type MPPosePoint = { x: number; y: number; z?: number; v?: number };
+type WSKeypointsMessage = {
+  model?: "hands" | "pose";
+  hands?: { landmarks?: MPHandPoint[] }[];
+  pose?: MPPosePoint[];
+};
 
 // --- WebSocket URL builder
 const WS_PATH = "/ws/camera";
@@ -77,7 +82,7 @@ const VideoRecording = () => {
   const recordedChunks = useRef<Blob[]>([]);
   const recordingRef = useRef(false);
 
-  const ensureCameraStream = async (): Promise<boolean> => {
+  const ensureCameraStream = useCallback(async (): Promise<boolean> => {
     if (mediaStreamRef.current && mediaStreamRef.current.active) {
       if (videoRef.current && videoRef.current.srcObject !== mediaStreamRef.current) {
         videoRef.current.srcObject = mediaStreamRef.current;
@@ -105,9 +110,9 @@ const VideoRecording = () => {
       });
       return false;
     }
-  };
+  }, [toast]);
 
-  const releaseCameraStream = () => {
+  const releaseCameraStream = useCallback(() => {
     const stream = mediaStreamRef.current;
     if (stream) {
       stream.getTracks().forEach((track) => track.stop());
@@ -121,7 +126,7 @@ const VideoRecording = () => {
       const ctx = overlay.getContext("2d");
       if (ctx) ctx.clearRect(0, 0, overlay.width, overlay.height);
     }
-  };
+  }, []);
 
   useEffect(() => {
     recordingRef.current = isRecording;
@@ -134,7 +139,7 @@ const VideoRecording = () => {
   const sequenceFramesRef = useRef<number[][]>([]);
   const sendFps = 15; // throttle frame sends
 
-  const extractFrameFeatures = (msg: any): number[] | null => {
+  const extractFrameFeatures = (msg: WSKeypointsMessage): number[] | null => {
     if (msg?.model !== "hands" || !Array.isArray(msg?.hands) || msg.hands.length === 0) {
       return null;
     }
@@ -161,6 +166,8 @@ const VideoRecording = () => {
     if (selectedTests.length === 0) {
       return undefined;
     }
+
+    const overlay = overlayRef.current;
 
     let isMounted = true;
     (async () => {
@@ -195,7 +202,6 @@ const VideoRecording = () => {
       sequenceFramesRef.current = [];
       releaseCameraStream();
 
-      const overlay = overlayRef.current;
       if (overlay) {
         const ctx = overlay.getContext("2d");
         if (ctx) ctx.clearRect(0, 0, overlay.width, overlay.height);
@@ -206,7 +212,7 @@ const VideoRecording = () => {
         rafRef.current = null;
       }
     };
-  }, [selectedTests.length]);
+  }, [ensureCameraStream, releaseCameraStream, selectedTests.length]);
 
   // ---- Recording timer ----
   useEffect(() => {
@@ -334,7 +340,7 @@ const VideoRecording = () => {
   };
 
   // ---- Draw keypoints on overlay (crisp with DPR) ----
-  const drawKeypoints = (msg: any) => {
+  const drawKeypoints = (msg: WSKeypointsMessage) => {
     const overlay = overlayRef.current;
     const video = videoRef.current;
     if (!overlay || !video) return;
@@ -527,7 +533,7 @@ const VideoRecording = () => {
         formData.append("video", blob, "recording.webm");
 
         try {
-          const response = await apiService.uploadVideo(formData);
+          const response = await uploadVideo(formData);
           if (response.success && response.data) {
             const data = response.data;
             const diskHint = data?.disk_path
@@ -539,11 +545,6 @@ const VideoRecording = () => {
               title: "Recording Saved",
               description: diskHint ? `Saved to ${diskHint}` : `Saved as ${data.filename}`,
             });
-            if (data?.filename) {
-              console.info(
-                `[VideoRecording] Saved video '${data.filename}' at '${diskHint || "(unknown path)"}'`
-              );
-            }
           } else {
             throw new Error(response.error || "Upload failed");
           }
@@ -605,7 +606,7 @@ const VideoRecording = () => {
   void ensureCameraStream();
     } else {
       releaseCameraStream();
-      navigate(`/patient/${id}/video-summary/${testId}`);
+      navigate(`/patients/${id}/video-summary/${testId}`);
     }
   };
 
@@ -723,7 +724,7 @@ const VideoRecording = () => {
               There are no tests queued for recording. Please return to the test selection page and choose at least one assessment to begin.
             </p>
             <Button asChild>
-              <Link to={`/patient/${id}/test-selection`}>
+              <Link to={`/patients/${id}/test-selection`}>
                 Back to Test Selection
               </Link>
             </Button>
@@ -740,7 +741,7 @@ const VideoRecording = () => {
         <div className="container mx-auto px-6 py-6">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-4">
-              <Link to={`/patient/${id}/test-selection`}>
+              <Link to={`/patients/${id}/test-selection`}>
                 <Button variant="outline" size="sm">
                   <ArrowLeft className="mr-2 h-4 w-4" />
                   Back to Selection
@@ -999,7 +1000,7 @@ const VideoRecording = () => {
                       ) : (
                         <Button
                           onClick={() =>
-                            navigate(`/patient/${id}/video-summary/${testId}`)
+                            navigate(`/patients/${id}/video-summary/${testId}`)
                           }
                           className="bg-primary hover:bg-primary-hover"
                         >

@@ -1,11 +1,18 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Upload, ArrowUpDown, CalendarClock, FileText, Loader2, Plus, Search, Stethoscope, User, UserPlus } from 'lucide-react';
+import { Upload, ArrowUpDown, CalendarClock, CheckSquare, FileText, Loader2, Plus, Search, Square, Stethoscope, Trash2, User, UserPlus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -14,16 +21,21 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Patient, DoctorNoteEntry } from '@/types/patient';
-import apiService, { normalizeBirthDate } from '@/services/api';
+import { createPatient, deletePatient, getPatients } from '@/services/patients';
+import { normalizeBirthDate } from '@/services/patient-mappers';
 import { useApiStatus } from '@/hooks/use-api-status';
 import { getSeverityColor, calculateAge } from '@/lib/utils';
 import { useAuth } from '@/auth/auth-context';
+import {
+  PatientCard,
+  PatientCsvImportDialog,
+  PatientListControls,
+  PatientQuickAddDialog,
+} from '@/components/patient-list/PatientListSections';
 
 // Remove mock data - will be fetched from API
 
@@ -42,6 +54,17 @@ const stageOrder: Record<Patient['severity'], number> = {
   'Stage 3': 3,
   'Stage 4': 4,
   'Stage 5': 5,
+};
+
+type CsvPatientDraft = {
+  firstName: string;
+  lastName: string;
+  birthDate: string;
+  height: string;
+  weight: string;
+  labResults: string;
+  doctorNotes: string;
+  severity: string;
 };
 
 const getLatestDoctorNote = (patient: Patient): DoctorNoteEntry | null => {
@@ -129,27 +152,24 @@ const PatientList = () => {
   const [csvFile, setCsvFile] = useState<File | null>(null);
   const [csvUploading, setCsvUploading] = useState(false);
   const csvFileInputRef = useRef<HTMLInputElement>(null);
+  const [isQuickAddOpen, setIsQuickAddOpen] = useState(false);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedPatientIds, setSelectedPatientIds] = useState<string[]>([]);
+  const [deletingPatients, setDeletingPatients] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
 
   const [quickFormData, setQuickFormData] = useState({
     firstName: '',
     lastName: '',
-    recordNumber: '',
     birthDate: '',
     severity: '' as Patient['severity'],
   });
 
-  useEffect(() => {
-    fetchPatients();
-  }, []);
-
-  const fetchPatients = async () => {
+  const fetchPatients = useCallback(async () => {
     setLoading(true);
     try {
-      const response = await apiService.getPatients();
-      console.log('PatientList API Response:', response);
+      const response = await getPatients();
       if (response.success && response.data) {
-        console.log('Patient data received:', response.data);
-        console.log('First patient historical data:', response.data[0]?.doctorNotesHistory, response.data[0]?.labResultsHistory);
         setPatients(response.data);
       } else {
         toast({
@@ -167,13 +187,89 @@ const PatientList = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [toast]);
+
+  useEffect(() => {
+    void fetchPatients();
+  }, [fetchPatients]);
 
   const handleCsvUploadClick = () => {
     if(csvFileInputRef.current){
       csvFileInputRef.current.value = "";
       csvFileInputRef.current.click();
     }
+  };
+
+  const toggleSelectionMode = () => {
+    setSelectionMode((prev) => {
+      if (prev) {
+        setSelectedPatientIds([]);
+      }
+      return !prev;
+    });
+  };
+
+  const togglePatientSelection = (patientId: string) => {
+    setSelectedPatientIds((prev) =>
+      prev.includes(patientId)
+        ? prev.filter((id) => id !== patientId)
+        : [...prev, patientId]
+    );
+  };
+
+  const handleDeleteSelected = async () => {
+    if (selectedPatientIds.length === 0) {
+      toast({
+        title: 'No Patients Selected',
+        description: 'Select at least one patient to delete.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setDeleteDialogOpen(true);
+  };
+
+  const confirmDeleteSelected = async () => {
+    setDeleteDialogOpen(false);
+
+    setDeletingPatients(true);
+    const failedIds: string[] = [];
+    let successCount = 0;
+
+    for (const patientId of selectedPatientIds) {
+      try {
+        const response = await deletePatient(patientId);
+        if (response.success) {
+          successCount += 1;
+        } else {
+          failedIds.push(patientId);
+        }
+      } catch {
+        failedIds.push(patientId);
+      }
+    }
+
+    const deletedIds = selectedPatientIds.filter((id) => !failedIds.includes(id));
+    if (deletedIds.length > 0) {
+      setPatients((prev) => prev.filter((patient) => !deletedIds.includes(patient.id)));
+    }
+
+    setSelectedPatientIds(failedIds);
+    if (failedIds.length === 0) {
+      setSelectionMode(false);
+    }
+
+    toast({
+      title: failedIds.length === 0 ? 'Patients Deleted' : 'Delete Completed With Issues',
+      description:
+        failedIds.length === 0
+          ? `Deleted ${successCount} patient${successCount === 1 ? '' : 's'}.`
+          : `Deleted ${successCount} patient${successCount === 1 ? '' : 's'}. ${failedIds.length} failed.`,
+      variant: failedIds.length === 0 ? 'default' : 'destructive',
+    });
+
+    setDeletingPatients(false);
   };
 
   const handleCsvFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -232,7 +328,7 @@ const PatientList = () => {
     if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
 
     // Match numeric formats like dd-mm-yyyy, dd/mm/yyyy, mm/dd/yyyy
-    const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+    const m = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
     if (m) {
       const a = Number(m[1]);
       const b = Number(m[2]);
@@ -330,15 +426,14 @@ const PatientList = () => {
       });
 
       const rows = lines.slice(1);
-      const toCreate: any[] = [];
+      const toCreate: CsvPatientDraft[] = [];
       for (const row of rows) {
         const cols = parseCSVLine(row);
         if (cols.every(c => c === '')) continue;
 
-        const item: any = {
+        const item: CsvPatientDraft = {
           firstName: '',
           lastName: '',
-          recordNumber: '',
           birthDate: '',
           height: '',
           weight: '',
@@ -382,9 +477,6 @@ const PatientList = () => {
             case 'weight':
               item.weight = val;
               break;
-            case 'recordNumber':
-              item.recordNumber = val;
-              break;
             case 'severity':
               item.severity = normalizeSeverity(val);
               break;
@@ -409,9 +501,6 @@ const PatientList = () => {
           item.firstName = 'Unknown';
           item.lastName = 'Patient';
         }
-        if (!item.recordNumber) {
-          item.recordNumber = `csv-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-        }
         if (!item.height) item.height = '170 cm';
         if (!item.weight) item.weight = '70 kg';
         if (!item.labResults) item.labResults = JSON.stringify({});
@@ -435,7 +524,7 @@ const PatientList = () => {
       let failCount = 0;
       for (const p of toCreate) {
         try {
-          const response = await apiService.createPatient(p);
+          const response = await createPatient(p);
           if (response.success && response.data) {
             setPatients(prev => [...prev, response.data]);
             successCount++;
@@ -550,7 +639,7 @@ const PatientList = () => {
     e.preventDefault();
     
     // Validate required fields
-    if (!quickFormData.firstName || !quickFormData.lastName || !quickFormData.recordNumber || !quickFormData.birthDate || !quickFormData.severity) {
+    if (!quickFormData.firstName || !quickFormData.lastName || !quickFormData.birthDate || !quickFormData.severity) {
       toast({
         title: "Validation Error",
         description: "Please fill in all required fields.",
@@ -573,7 +662,6 @@ const PatientList = () => {
     const newPatientData = {
       firstName: quickFormData.firstName,
       lastName: quickFormData.lastName,
-      recordNumber: quickFormData.recordNumber,
       birthDate: normalizedBirthDate,
       height: '170 cm', // Default values for quick add
       weight: '70 kg',
@@ -585,17 +673,14 @@ const PatientList = () => {
     };
 
     try {
-      console.log('Creating patient with data:', newPatientData);
-      const response = await apiService.createPatient(newPatientData);
-      console.log('API response:', response);
+      const response = await createPatient(newPatientData);
       
       if (response.success && response.data) {
         setPatients(prev => [...prev, response.data]);
-        setIsModalOpen(false);
+        setIsQuickAddOpen(false);
         setQuickFormData({
           firstName: '',
           lastName: '',
-          recordNumber: '',
           birthDate: '',
           severity: '' as Patient['severity'],
         });
@@ -636,7 +721,7 @@ const PatientList = () => {
                 <div className="flex items-center mt-2">
                   <div className={`w-2 h-2 rounded-full mr-2 ${isConnected ? 'bg-green-500' : 'bg-red-500'}`} />
                   <span className="text-xs text-muted-foreground">
-                    {isConnected ? 'Connected to backend' : 'Backend disconnected'}
+                    {isConnected ? 'Backend reachable' : 'Backend unavailable'}
                   </span>
                 </div>
               )}
@@ -675,107 +760,70 @@ const PatientList = () => {
 
               {/* Action Buttons */}
               <div className="flex items-center space-x-3">
-                {/* Upload Modal */}
-                <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
-                  <DialogTrigger asChild>
-                    <Button variant="outline" className="border-primary text-primary hover:bg-primary hover:text-primary-foreground">
-                      <UserPlus className="mr-2 h-4 w-4" />
-                      Upload Patient
-                    </Button>
-                  </DialogTrigger>
-                  <DialogContent className="w-full sm:max-w-2xl">
-                    <DialogHeader>
-                      <DialogTitle>Upload Patients from CSV</DialogTitle>
-                    </DialogHeader>
-                    <div className="space-y-6 py-4">
-                      {/* File Upload Section */}
-                      <div className="space-y-4">
-                        <div className="flex flex-col items-center justify-center border-2 border-dashed border-muted-foreground/25 rounded-lg p-8 hover:border-primary/50 transition-colors">
-                          <Upload className="h-12 w-12 text-muted-foreground mb-4" />
-                          <Button 
-                            type="button"
-                            variant="outline" 
-                            onClick={handleCsvUploadClick}
-                            className="mb-2"
-                          >
-                            <Upload className="mr-2 h-4 w-4" />
-                            {csvFile ? 'Change CSV File' : 'Select CSV File'}
-                          </Button>
-                          <p className="text-sm text-muted-foreground">
-                            Upload a CSV file containing patient information
-                          </p>
-                          <input 
-                            ref={csvFileInputRef}
-                            type="file"
-                            accept=".csv"
-                            onChange={handleCsvFileChange}
-                            className="hidden"
-                          />
-                        </div>
+                <PatientCsvImportDialog
+                  isOpen={isModalOpen}
+                  onOpenChange={(open) => {
+                    setIsModalOpen(open);
+                    if (!open) {
+                      setCsvFile(null);
+                    }
+                  }}
+                  csvFile={csvFile}
+                  csvUploading={csvUploading}
+                  csvFileInputRef={csvFileInputRef}
+                  onUploadClick={handleCsvUploadClick}
+                  onFileChange={handleCsvFileChange}
+                  onProcess={processCsvFile}
+                />
 
-                        {/* File Selected Message */}
-                        {csvFile && (
-                          <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg p-4">
-                            <div className="flex items-center gap-2">
-                              <div className="h-2 w-2 rounded-full bg-green-500" />
-                              <p className="text-sm font-medium text-green-900 dark:text-green-100">
-                                File uploaded: <span className="font-semibold">{csvFile.name}</span>
-                              </p>
-                            </div>
-                            <p className="text-xs text-green-700 dark:text-green-300 mt-1 ml-4">
-                              Size: {(csvFile.size / 1024).toFixed(2)} KB
-                            </p>
-                          </div>
-                        )}
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={toggleSelectionMode}
+                  className="border-primary text-primary hover:bg-primary hover:text-primary-foreground"
+                >
+                  {selectionMode ? (
+                    <>
+                      <Square className="mr-2 h-4 w-4" />
+                      Cancel Select
+                    </>
+                  ) : (
+                    <>
+                      <CheckSquare className="mr-2 h-4 w-4" />
+                      Select
+                    </>
+                  )}
+                </Button>
 
-                        {/* CSV Format Info */}
-                        <div className="bg-muted/50 rounded-lg p-4">
-                          <h4 className="text-sm font-semibold mb-2">CSV Format Requirements:</h4>
-                          <ul className="text-xs text-muted-foreground space-y-1">
-                            <li>• Headers: firstName, lastName, birthDate, recordNumber, severity</li>
-                            <li>• Severity: Use "Stage 1" through "Stage 5" or numbers 1-5</li>
-                            <li>• Birth Date: Use YYYY-MM-DD format (e.g., 1980-05-12)</li>
-                            <li>• Optional fields: height, weight, labResults, doctorNotes</li>
-                          </ul>
-                        </div>
-                      </div>
-
-                      {/* Action Buttons */}
-                      <div className="flex justify-end gap-3">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          onClick={() => {
-                            setIsModalOpen(false);
-                            setCsvFile(null);
-                          }}
-                        >
-                          Cancel
-                        </Button>
-                        <Button
-                          type="button"
-                          onClick={processCsvFile}
-                          disabled={!csvFile || csvUploading}
-                        >
-                          {csvUploading ? (
-                            <>
-                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                              Uploading...
-                            </>
-                          ) : (
-                            <>
-                              <Upload className="mr-2 h-4 w-4" />
-                              Import Patients
-                            </>
-                          )}
-                        </Button>
-                      </div>
-                    </div>
-                  </DialogContent>
-                </Dialog>
-
-                {/* Full Form Link */}
-                <Link to="/patient-form">
+                {selectionMode ? (
+                  <Button
+                    type="button"
+                    onClick={handleDeleteSelected}
+                    disabled={selectedPatientIds.length === 0 || deletingPatients}
+                    className="bg-destructive hover:bg-destructive/90 text-destructive-foreground"
+                  >
+                    {deletingPatients ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Deleting...
+                      </>
+                    ) : (
+                      <>
+                        <Trash2 className="mr-2 h-4 w-4" />
+                        Delete Patients{selectedPatientIds.length > 0 ? ` (${selectedPatientIds.length})` : ''}
+                      </>
+                    )}
+                  </Button>
+                ) : (
+                  <PatientQuickAddDialog
+                    isOpen={isQuickAddOpen}
+                    onOpenChange={setIsQuickAddOpen}
+                    formData={quickFormData}
+                    onFieldChange={handleQuickFormChange}
+                    onSubmit={handleQuickSubmit}
+                  />
+                )}
+                <Link to="/patients/new">
                   <Button className="bg-primary hover:bg-primary-hover text-primary-foreground">
                     <Plus className="mr-2 h-4 w-4" />
                     Detailed Form
@@ -790,46 +838,15 @@ const PatientList = () => {
       {/* Search and Content */}
       <div className="container mx-auto px-6 py-8">
         {/* Search & Sort */}
-        <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div className="relative w-full max-w-md md:w-auto">
-            <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="Search patients by name or record number..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-10 w-full md:w-[380px]"
-            />
-          </div>
-          <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row sm:items-center">
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-muted-foreground">Sort by</span>
-              <Select
-                value={sortField}
-                onValueChange={(value) => handleSortFieldChange(value as SortField)}
-              >
-                <SelectTrigger className="w-[160px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {SORT_OPTIONS.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={toggleSortDirection}
-              className="flex items-center gap-2 self-start sm:self-auto"
-            >
-              <ArrowUpDown className="h-4 w-4" />
-              {sortDirection === 'asc' ? 'Asc' : 'Desc'}
-            </Button>
-          </div>
-        </div>
+        <PatientListControls
+          searchTerm={searchTerm}
+          onSearchTermChange={setSearchTerm}
+          sortField={sortField}
+          sortOptions={SORT_OPTIONS}
+          onSortFieldChange={handleSortFieldChange}
+          sortDirection={sortDirection}
+          onToggleSortDirection={toggleSortDirection}
+        />
 
         {/* Patient Cards */}
         {loading ? (
@@ -850,74 +867,20 @@ const PatientList = () => {
               const latestNoteDate = latestNote
                 ? (latestNote.date instanceof Date ? latestNote.date : new Date(latestNote.date))
                 : null;
-
+              const isSelected = selectedPatientIds.includes(patient.id);
               return (
-                <Link key={patient.id} to={`/patient/${patient.id}`}>
-                  <Card className="hover:shadow-medical transition-all duration-200 hover:scale-[1.02] cursor-pointer">
-                    <CardHeader className="pb-3">
-                      <div className="flex items-start justify-between">
-                        <div className="flex items-center space-x-3">
-                          <div className="p-2 rounded-full bg-medical-light">
-                            <User className="h-5 w-5 text-medical-blue" />
-                          </div>
-                          <div>
-                            <CardTitle className="text-lg">
-                              {patient.firstName} {patient.lastName}
-                            </CardTitle>
-                            <p className="text-sm text-muted-foreground">
-                              Record: {patient.recordNumber}
-                            </p>
-                          </div>
-                        </div>
-                        <Badge className={getSeverityColor(patient.severity)}>
-                          {patient.severity}
-                        </Badge>
-                      </div>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="space-y-3">
-                        <div className="flex items-center text-sm text-muted-foreground">
-                          <FileText className="mr-2 h-4 w-4" />
-                          Age: {patient.birthDate ? `${calculateAge(patient.birthDate) ?? 'Unknown'} years` : 'N/A'}
-                        </div>
-                        <div className="flex items-center text-sm text-muted-foreground">
-                          <CalendarClock className="mr-2 h-4 w-4" />
-                          Last visit: {lastVisit ? lastVisit.toLocaleDateString() : 'N/A'}
-                        </div>
-                        <div className="flex items-center text-sm text-muted-foreground">
-                          <Stethoscope className="mr-2 h-4 w-4" />
-                          Physician: {primaryPhysician}
-                        </div>
-                        {noteToDisplay ? (
-                          <div className="bg-muted/50 border-l-4 border-medical-blue p-3 rounded-md">
-                            <div className="flex items-start gap-2">
-                              <FileText className="h-4 w-4 text-medical-blue mt-0.5 flex-shrink-0" />
-                              <div className="flex-1">
-                                <p className="text-sm font-medium text-foreground">Latest Note:</p>
-                                <p className="text-sm text-muted-foreground mt-1">"{trimmedNote}"</p>
-                                {(latestNoteDate || latestNote?.addedBy) && (
-                                  <p className="text-xs text-muted-foreground/70 mt-2">
-                                    {latestNoteDate ? latestNoteDate.toLocaleDateString() : 'Unknown date'}
-                                    {latestNote?.addedBy ? ` by ${latestNote.addedBy}` : ''}
-                                  </p>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="bg-muted/30 p-3 rounded-md border border-dashed">
-                            <div className="flex items-center gap-2">
-                              <FileText className="h-4 w-4 text-muted-foreground/50" />
-                              <p className="text-sm text-muted-foreground/70 italic">
-                                No doctor's notes available
-                              </p>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    </CardContent>
-                  </Card>
-                </Link>
+                <PatientCard
+                  key={patient.id}
+                  patient={patient}
+                  selectionMode={selectionMode}
+                  isSelected={isSelected}
+                  onSelect={() => togglePatientSelection(patient.id)}
+                  lastVisit={lastVisit}
+                  primaryPhysician={primaryPhysician}
+                  noteToDisplay={noteToDisplay}
+                  trimmedNote={trimmedNote}
+                  latestNoteDate={latestNoteDate}
+                />
               );
             })}
           </div>
@@ -930,7 +893,7 @@ const PatientList = () => {
             <p className="text-muted-foreground mb-4">
               {searchTerm ? 'Try adjusting your search terms.' : 'Get started by adding your first patient.'}
             </p>
-            <Link to="/patient-form">
+            <Link to="/patients/new">
               <Button>
                 <Plus className="mr-2 h-4 w-4" />
                 Add First Patient
@@ -938,6 +901,31 @@ const PatientList = () => {
             </Link>
           </div>
         )}
+
+        <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete selected patients?</AlertDialogTitle>
+              <AlertDialogDescription>
+                Delete {selectedPatientIds.length} selected patient{selectedPatientIds.length === 1 ? '' : 's'}.
+                This cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={deletingPatients}>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={(event) => {
+                  event.preventDefault();
+                  void confirmDeleteSelected();
+                }}
+                disabled={deletingPatients}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              >
+                {deletingPatients ? 'Deleting...' : 'Delete Patients'}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
     </div>
   );

@@ -1,30 +1,13 @@
 // frontend/src/pages/VideoSummary.tsx
-import React, { useState, useEffect, ReactNode } from "react";
+import React, { useState, useEffect, useMemo, ReactNode } from "react";
 import { useParams, Link } from "react-router-dom";
 import {
   ArrowLeft,
   Download,
-  Calendar,
   TrendingUp,
-  BarChart3,
-  AlertTriangle,
-  Brain,
-  CheckCircle2,
-  Pencil,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from "@/components/ui/dialog";
-import { Textarea } from "@/components/ui/textarea";
-import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -51,111 +34,38 @@ import {
   Legend,
   ComposedChart,
   Area,
-  Label,
+  Label as RechartsLabel,
   Customized,
 } from "recharts";
 import { Test } from "@/types/patient";
-
-/* ========= Backend base URL for video + APIs =========
-   If you have a Vite proxy that maps `/api` -> http://localhost:8000,
-   keep API_BASE = "/api". If not, change it to "http://localhost:8000".
-*/
-const API_BASE =
-  (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "/api";
+import { getPatientTests } from "@/services/tests";
+import { useToast } from "@/hooks/use-toast";
+import {
+  DoctorLabelDialog,
+  MlPredictionCard,
+  PerformanceStatisticsCard,
+  RecordedVideoCard,
+  TestHistoryCard,
+  VideoSummaryHeader,
+} from "@/components/video-summary/VideoSummarySections";
+import {
+  type AxisAggResponse,
+  downloadDtwSession,
+  getDtwAxisAggregate,
+  getDtwSeries,
+  getMlPredictionFromSession,
+  getRecordingUrl,
+  labelDtwSession,
+  listDtwSessions,
+  listPatientVideos,
+  lookupDtwSession,
+  type DtwSeriesCurve,
+  type DtwSeriesMetrics,
+  type DtwSessionMeta,
+  type MlPrediction,
+} from "@/services/dtw";
 
 /* ========================= Types ========================= */
-type DtwSessionMeta = {
-  session_id: string;
-  created_utc: string;
-  model?: "hands" | "pose";
-  live_len?: number;
-  ref_len?: number;
-  distance?: number;
-  similarity?: number;
-};
-
-type AxisAggResponse = {
-  ok: boolean;
-  axis: "x" | "y" | "z";
-  reduce: "mean" | "median" | "pca1";
-  landmarks: "all" | number[];
-  live: { x: number[]; y: number[] };
-  ref: { x: number[]; y: number[] };
-  path: { i: number[]; j: number[] };
-  warped: { k: number[]; live: number[]; ref: number[] };
-};
-
-type MlPrediction = {
-  predicted_updrs_stage: number;
-  severity: string;
-  confidence: number;
-  probabilities: Record<string, number>;
-};
-
-type DtwSeriesCurve = {
-  local_cost_path: { x: number[]; y: number[] };
-  cumulative_progress: { x: number[]; y: number[] };
-  alignment_map: { x: number[]; y: number[] };
-};
-
-type DtwSeriesMetrics = {  ok: boolean;
-
-  // New distance / similarity fields from backend
-  distance_pos?: number;
-  distance_amp?: number;
-  distance_spd?: number;
-
-  avg_step_pos?: number;
-
-  similarity_overall?: number;
-  similarity_pos?: number;
-  similarity_amp?: number;
-  similarity_spd?: number;
-
-  // Backwards-compat (if backend still returns these)
-  distance?: number;
-  avg_step_cost?: number;
-  similarity?: number;
-
-  // Series for plotting DTW curves
-  series?: {
-    position: DtwSeriesCurve;
-    amplitude: DtwSeriesCurve;
-    speed: DtwSeriesCurve;
-  };
-};
-
-/* ===================== Mock (unchanged) ===================== */
-const mockTestHistory: Test[] = [
-  {
-    id: "stand-and-sit",
-    patientId: "1",
-    name: "Stand and Sit Assessment",
-    type: "stand-and-sit",
-    date: new Date("2024-01-20"),
-    status: "completed",
-    results: {
-      duration: 45,
-      score: 78,
-      keypoints: [],
-      analysis: "Moderate improvement in mobility",
-    },
-  },
-  {
-    id: "palm-open",
-    patientId: "1",
-    name: "Palm Open Evaluation",
-    type: "fist-open-close",
-    date: new Date("2024-01-18"),
-    status: "completed",
-    results: {
-      duration: 30,
-      score: 82,
-      keypoints: [],
-      analysis: "Good hand dexterity maintained",
-    },
-  },
-];
 
 /* ======================= Helpers ======================= */
 const canonicalTests = [
@@ -174,14 +84,24 @@ const normalizeTestKey = (t?: string | null): CanonicalTest | null => {
   return isCanonical(s) ? (s as CanonicalTest) : null;
 };
 
-async function fetchJSON<T>(url: string, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(url, { signal });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(text || `HTTP ${res.status}`);
+const formatHistorySummary = (test: Test): string => {
+  if (test.similarity !== null && test.similarity !== undefined) {
+    return `Similarity ${(test.similarity * 100).toFixed(1)}%`;
   }
-  return res.json();
-}
+  if (test.recordingFile) {
+    return `Recording ${test.recordingFile}`;
+  }
+  return "Backend test record";
+};
+
+const resolveDurationSeconds = (test?: Test): string => {
+  if (!test) return "0s";
+  if (test.results?.duration) return `${test.results.duration}s`;
+  if (test.frameCount && test.fps && test.fps > 0) {
+    return `${(test.frameCount / test.fps).toFixed(1)}s`;
+  }
+  return "0s";
+};
 
 const Explainer = ({
   title,
@@ -258,8 +178,11 @@ type GapSegmentsProps = {
   stroke?: string;
   strokeWidth?: number;
   opacity?: number;
+  xAxisMap?: Record<string, { scale: (value: number) => number }>;
+  yAxisMap?: Record<string, { scale: (value: number) => number }>;
+  offset?: { left?: number; top?: number };
 };
-const GapSegments: React.FC<any & GapSegmentsProps> = (props) => {
+const GapSegments = (props: GapSegmentsProps) => {
   const {
     data,
     xKey,
@@ -273,8 +196,8 @@ const GapSegments: React.FC<any & GapSegmentsProps> = (props) => {
     offset,
   } = props;
 
-  const xAxis = Object.values(xAxisMap || {})[0] as any;
-  const yAxis = Object.values(yAxisMap || {})[0] as any;
+  const xAxis = Object.values(xAxisMap || {})[0];
+  const yAxis = Object.values(yAxisMap || {})[0];
   if (!xAxis || !yAxis) return null;
 
   const xScale = xAxis.scale;
@@ -341,27 +264,19 @@ function DtwAggregatePanels({
     (async () => {
       setLoading(true);
       setErr(null);
-      try {
-        const res = await fetch(
-          `/api/dtw/sessions/${encodeURIComponent(
-            testKey
-          )}/${encodeURIComponent(sessionId)}/axis_agg` +
-            `?axis=${axis}&reduce=${reduce}&landmarks=${encodeURIComponent(
-              landmarks
-            )}&max_points=${maxPoints}`
-        );
-        const json = await res.json();
-        if (!aborted) {
-          if (json?.ok) setData(json as AxisAggResponse);
-          else {
-            setData(null);
-            setErr(json?.detail || "Failed to load aggregated series");
-          }
+      const response = await getDtwAxisAggregate(
+        testKey,
+        sessionId,
+        { axis, reduce, landmarks, maxPoints }
+      );
+      if (!aborted) {
+        if (response.success && response.data?.ok) {
+          setData(response.data as AxisAggResponse);
+        } else {
+          setData(null);
+          setErr(response.error || "Failed to load aggregated series");
         }
-      } catch (e: any) {
-        if (!aborted) setErr(e?.message || "Failed to load aggregated series");
-      } finally {
-        if (!aborted) setLoading(false);
+        setLoading(false);
       }
     })();
     return () => {
@@ -409,7 +324,7 @@ function DtwAggregatePanels({
             >
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="t" {...xCommonProps}>
-                <Label
+                <RechartsLabel
                   value="Series index (time)"
                   offset={-4}
                   position="insideBottom"
@@ -449,10 +364,10 @@ function DtwAggregatePanels({
             >
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="i" {...xCommonProps}>
-                <Label value="Live index" offset={-4} position="insideBottom" />
+                <RechartsLabel value="Live index" offset={-4} position="insideBottom" />
               </XAxis>
               <YAxis dataKey="j" {...yCommonProps}>
-                <Label
+                <RechartsLabel
                   angle={-90}
                   value="Reference index"
                   position="insideLeft"
@@ -486,7 +401,7 @@ function DtwAggregatePanels({
           >
             <CartesianGrid strokeDasharray="3 3" />
             <XAxis dataKey="k" {...xCommonProps}>
-              <Label
+              <RechartsLabel
                 value="DTW path step"
                 offset={-4}
                 position="insideBottom"
@@ -544,10 +459,12 @@ function DtwAggregatePanels({
 /* ========================= Page ========================= */
 const VideoSummary = () => {
   const { id, testId } = useParams<{ id: string; testId: string }>();
+  const { toast } = useToast();
 
   // tests & videos
   const [selectedHistoryFilter, setSelectedHistoryFilter] = useState("all");
-  const [testHistory] = useState<Test[]>(mockTestHistory);
+  const [testHistory, setTestHistory] = useState<Test[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(true);
   const [videoList, setVideoList] = useState<string[]>([]);
   const [selectedVideo, setSelectedVideo] = useState<string | null>(null);
 
@@ -577,12 +494,62 @@ const VideoSummary = () => {
   const [labelSubmitting, setLabelSubmitting] = useState(false);
   const [labelResult, setLabelResult] = useState<{ stage: number; source: string } | null>(null);
 
-  const currentTest =
-    testHistory.find((t) => t.type === testId) || testHistory[0];
-  const filteredHistory = testHistory.filter(
-    (test) =>
-      selectedHistoryFilter === "all" || test.type === selectedHistoryFilter
+  const sortedHistory = useMemo(
+    () => [...testHistory].sort((a, b) => b.date.getTime() - a.date.getTime()),
+    [testHistory]
   );
+
+  const currentTest = useMemo(
+    () =>
+      sortedHistory.find((test) => String(test.id) === testId) ||
+      sortedHistory.find((test) => test.dtwSessionId === testId) ||
+      sortedHistory.find((test) => normalizeTestKey(test.type) === testKey) ||
+      sortedHistory[0],
+    [sortedHistory, testId, testKey]
+  );
+
+  const filteredHistory = useMemo(
+    () =>
+      sortedHistory.filter(
+        (test) =>
+          selectedHistoryFilter === "all" || test.type === selectedHistoryFilter
+      ),
+    [selectedHistoryFilter, sortedHistory]
+  );
+  const hasUnknownHistory = useMemo(
+    () => sortedHistory.some((test) => test.type === 'unknown'),
+    [sortedHistory]
+  );
+
+  useEffect(() => {
+    if (!id) {
+      setTestHistory([]);
+      setHistoryLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setHistoryLoading(true);
+    (async () => {
+      try {
+        const response = await getPatientTests(id);
+        if (cancelled) return;
+        setTestHistory(response.success && response.data ? response.data : []);
+      } catch {
+        if (!cancelled) {
+          setTestHistory([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setHistoryLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
 
   // Normalize selectedVideo in case backend returns "recordings/xyz.mp4"
   const normalizedVideoName =
@@ -592,81 +559,79 @@ const VideoSummary = () => {
 
   const videoSrc =
     normalizedVideoName != null
-      ? `${API_BASE}/recordings/${encodeURIComponent(normalizedVideoName)}`
+      ? getRecordingUrl(normalizedVideoName)
       : null;
-
-  useEffect(() => {
-    if (normalizedVideoName && videoSrc) {
-      // This helps you see in DevTools exactly what URL is being used
-      // and what filename the backend thinks you're requesting.
-      console.log("Selected video:", normalizedVideoName);
-      console.log("Video src URL:", videoSrc);
-    }
-  }, [normalizedVideoName, videoSrc]);
 
   // Resolve route: testId may be a test type OR a session id
   useEffect(() => {
     setErrMsg(null);
     setRouteResolved(false);
 
+    const currentTestKey = normalizeTestKey(currentTest?.type);
+    if (currentTest?.dtwSessionId && testId === currentTest.dtwSessionId && currentTestKey) {
+      setTestKey(currentTestKey);
+      setSessionId(currentTest.dtwSessionId);
+      setRouteResolved(true);
+      return;
+    }
+
     const norm = normalizeTestKey(testId);
     if (norm) {
       setTestKey(norm);
-      setSessionId(null);
+      setSessionId(currentTest?.dtwSessionId ?? null);
       setRouteResolved(true);
       return;
     }
     if (!testId) {
+      setTestKey(currentTestKey);
+      setSessionId(currentTest?.dtwSessionId ?? null);
       setRouteResolved(true);
       return;
     }
 
     const ctrl = new AbortController();
     (async () => {
-      try {
-        const data = await fetchJSON<{ testName: string; sessionId: string }>(
-          `/api/dtw/sessions/lookup/${encodeURIComponent(testId)}`,
-          ctrl.signal
-        );
-        const key = normalizeTestKey(data.testName);
-        if (!key)
-          throw new Error(
-            `Unknown DTW test '${data.testName}' for session '${data.sessionId}'`
+      const response = await lookupDtwSession(testId, ctrl.signal);
+      if (response.success && response.data) {
+        const key = normalizeTestKey(response.data.testName);
+        if (!key) {
+          setErrMsg(
+            `Unknown DTW test '${response.data.testName}' for session '${response.data.sessionId}'`
           );
-        setTestKey(key);
-        setSessionId(data.sessionId);
-      } catch (e: any) {
-        setErrMsg(e?.message || "Failed to resolve session from URL");
+          setTestKey(null);
+          setSessionId(null);
+        } else {
+          setTestKey(key);
+          setSessionId(response.data.sessionId);
+        }
+      } else {
+        setErrMsg(response.error || "Failed to resolve session from URL");
         setTestKey(null);
         setSessionId(null);
-      } finally {
-        setRouteResolved(true);
       }
+      setRouteResolved(true);
     })();
 
     return () => ctrl.abort();
-  }, [testId]);
+  }, [currentTest?.dtwSessionId, currentTest?.type, testId]);
 
   // Videos list
   useEffect(() => {
     if (!routeResolved || !id || !testKey) return;
     const ctrl = new AbortController();
     (async () => {
-      try {
-        const data = await fetchJSON<{ success: boolean; videos: string[] }>(
-          `/api/videos/${encodeURIComponent(id)}/${encodeURIComponent(testKey)}`,
-          ctrl.signal
-        );
-        console.log("Videos API response:", data);
-        if (data.success && data.videos?.length > 0) {
-          setVideoList(data.videos);
-          setSelectedVideo(data.videos[0]);
+      const response = await listPatientVideos(id, testKey, ctrl.signal);
+      if (response.success) {
+        const videos = response.data ?? [];
+        if (videos.length > 0) {
+          setVideoList(videos);
+          setSelectedVideo(videos[0]);
         } else {
           setVideoList([]);
           setSelectedVideo(null);
         }
-      } catch (e) {
-        console.error("Error fetching videos:", e);
+      } else {
+        console.error("Error fetching videos:", response.error);
         setVideoList([]);
         setSelectedVideo(null);
       }
@@ -679,17 +644,14 @@ const VideoSummary = () => {
     if (!routeResolved || !testKey) return;
     const ctrl = new AbortController();
     (async () => {
-      try {
-        const data = await fetchJSON<DtwSessionMeta[]>(
-          `/api/dtw/sessions/${encodeURIComponent(testKey)}`,
-          ctrl.signal
-        );
-        setSessions(data);
-        setSessionId((prev) => prev ?? data[0]?.session_id ?? null);
-      } catch (e: any) {
+      const response = await listDtwSessions(testKey, ctrl.signal);
+      if (response.success && response.data) {
+        setSessions(response.data);
+        setSessionId((prev) => prev ?? response.data?.[0]?.session_id ?? null);
+      } else {
         setSessions([]);
         setSessionId(null);
-        setErrMsg(e?.message || "No DTW sessions found for this test.");
+        setErrMsg(response.error || "No DTW sessions found for this test.");
       }
     })();
     return () => ctrl.abort();
@@ -704,23 +666,16 @@ const VideoSummary = () => {
     }
     const ctrl = new AbortController();
     (async () => {
-      try {
-        setMetricsLoading(true);
-        setMetricsErr(null);
-        const data = await fetchJSON<any>(
-          `/api/dtw/sessions/${encodeURIComponent(
-            testKey
-          )}/${encodeURIComponent(sessionId)}/series?max_points=200`,
-          ctrl.signal
-        );
-        setMetrics(data as DtwSeriesMetrics);
-
-      } catch (e: any) {
+      setMetricsLoading(true);
+      setMetricsErr(null);
+      const response = await getDtwSeries(testKey, sessionId, 200, ctrl.signal);
+      if (response.success && response.data) {
+        setMetrics(response.data as DtwSeriesMetrics);
+      } else {
         setMetrics(null);
-        setMetricsErr(e?.message || "Failed to load DTW metrics");
-      } finally {
-        setMetricsLoading(false);
+        setMetricsErr(response.error || "Failed to load DTW metrics");
       }
+      setMetricsLoading(false);
     })();
     return () => ctrl.abort();
   }, [testKey, sessionId]);
@@ -734,32 +689,25 @@ const VideoSummary = () => {
     }
     const ctrl = new AbortController();
     (async () => {
-      try {
-        setMlLoading(true);
-        setMlErr(null);
-        const data = await fetchJSON<MlPrediction>(
-          `/api/ml/updrs/from_session/${encodeURIComponent(testKey)}/${encodeURIComponent(sessionId)}`,
-          ctrl.signal
-        );
-        setMlPrediction(data);
-      } catch (e: any) {
+      setMlLoading(true);
+      setMlErr(null);
+      const response = await getMlPredictionFromSession(testKey, sessionId, ctrl.signal);
+      if (response.success && response.data) {
+        setMlPrediction(response.data);
+      } else {
         setMlPrediction(null);
-        setMlErr(e?.message || "ML prediction unavailable");
-      } finally {
-        setMlLoading(false);
+        setMlErr(response.error || "ML prediction unavailable");
       }
+      setMlLoading(false);
     })();
     return () => ctrl.abort();
   }, [testKey, sessionId]);
 
   const onExport = async () => {
     if (!testKey || !sessionId) return;
-    try {
-      const payload = await fetchJSON<{ npz: string; meta: string }>(
-        `/api/dtw/sessions/${encodeURIComponent(testKey)}/${encodeURIComponent(
-          sessionId
-        )}/download`
-      );
+    const response = await downloadDtwSession(testKey, sessionId);
+    if (response.success && response.data) {
+      const payload = response.data;
       const blob = new Blob([JSON.stringify(payload, null, 2)], {
         type: "application/json",
       });
@@ -771,490 +719,96 @@ const VideoSummary = () => {
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
-    } catch (e) {
-      console.error(e);
+    } else {
+      console.error(response.error);
     }
   };
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
-      <div className="border-b bg-card shadow-card">
-        <div className="container mx-auto px-6 py-6 flex justify-between items-center">
-          <div className="flex items-center space-x-4">
-            <Link to={`/patient/${id}`}>
-              <Button variant="outline" size="sm">
-                <ArrowLeft className="mr-2 h-4 w-4" />
-                Back to Patient
-              </Button>
-            </Link>
-            <div>
-              <h1 className="text-3xl font-bold text-foreground">
-                Video Processing Summary
-              </h1>
-              <p className="text-muted-foreground mt-1">
-                DTW analysis and results
-              </p>
-            </div>
-          </div>
-          <div className="flex space-x-3">
-            <Button
-              variant="outline"
-              disabled={!testKey || !sessionId}
-              onClick={onExport}
-            >
-              <Download className="mr-2 h-4 w-4" />
-              Export DTW Paths
-            </Button>
-            <Link to={`/patient/${id}/test-selection`}>
-              <Button className="bg-gradient-primary hover:bg-primary-hover">
-                New Test Session
-              </Button>
-            </Link>
-          </div>
-        </div>
-      </div>
+      <VideoSummaryHeader patientId={id} canExport={!!testKey && !!sessionId} onExport={onExport} />
 
       {/* ===== Content: top grid then full-width chart ===== */}
       <div className="container mx-auto px-6 py-10 grid grid-cols-12 gap-10">
         {/* Left: Video (spans 8/12) */}
         <div className="col-span-12 xl:col-span-7">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center justify-between">
-                Recorded Video
-                <Badge
-                  variant="secondary"
-                  className="bg-success text-success-foreground"
-                >
-                  Processed
-                </Badge>
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {normalizedVideoName && videoSrc ? (
-                <>
-                  <video
-                    key={normalizedVideoName} // force reload when selection changes
-                    controls
-                    className="w-full rounded-lg aspect-video"
-                  >
-                    <source src={videoSrc} type="video/mp4" />
-                    Your browser does not support the video tag.
-                  </video>
-                  <div className="text-xs text-muted-foreground mt-2">
-                    Playing from: <code>{videoSrc}</code>
-                  </div>
-                </>
-              ) : (
-                <div className="bg-gray-900 text-white text-center py-10 rounded-lg">
-                  No video available. Recordings are saved under{" "}
-                  <code>backend/routes/recordings</code>.
-                </div>
-              )}
-              {videoList.length > 1 && (
-                <div className="flex items-center gap-2">
-                  <span className="block text-sm font-medium text-foreground">
-                    Select recording
-                  </span>
-                  <select
-                    value={selectedVideo || ""}
-                    onChange={(e) => setSelectedVideo(e.target.value)}
-                    className="border p-2 rounded-md text-sm"
-                  >
-                    {videoList.map((video, idx) => (
-                      <option key={idx} value={video}>
-                        {video}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-              <div className="flex justify-between text-sm text-muted-foreground">
-                <span>Duration: {currentTest?.results?.duration || 0}s</span>
-                <span>Resolution: 1920×1080</span>
-                <span>Keypoints: Detected</span>
-              </div>
-            </CardContent>
-          </Card>
+          <RecordedVideoCard
+            normalizedVideoName={normalizedVideoName}
+            videoSrc={videoSrc}
+            videoList={videoList}
+            selectedVideo={selectedVideo}
+            onSelectVideo={setSelectedVideo}
+            duration={resolveDurationSeconds(currentTest)}
+          />
         </div>
 
         {/* Right: History + Stats (spans 5/12) */}
         <div className="col-span-12 xl:col-span-5 space-y-10">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex justify-between">
-                <span className="flex items-center">
-                  <Calendar className="mr-2 h-5 w-5" />
-                  Test History
-                </span>
-                <Select
-                  value={selectedHistoryFilter}
-                  onValueChange={setSelectedHistoryFilter}
-                >
-                  <SelectTrigger className="w-40">
-                    <SelectValue placeholder="Filter" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Tests</SelectItem>
-                    <SelectItem value="stand-and-sit">Stand & Sit</SelectItem>
-                    <SelectItem value="finger-tapping">
-                      Finger Tapping
-                    </SelectItem>
-                    <SelectItem value="fist-open-close">
-                      Fist Open & Close
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {filteredHistory.map((test) => (
-                <div key={test.id} className="border p-3 rounded-lg">
-                  <div className="flex justify-between items-center">
-                    <div>
-                      <p className="font-medium text-sm">{test.name}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {test.date.toDateString()}
-                      </p>
-                    </div>
-                    <Badge
-                      variant="secondary"
-                      className="bg-success text-success-foreground"
-                    >
-                      Score: {test.results?.score}
-                    </Badge>
-                  </div>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    {test.results?.analysis}
-                  </p>
-                </div>
-              ))}
-            </CardContent>
-          </Card>
+          <TestHistoryCard
+            selectedHistoryFilter={selectedHistoryFilter}
+            onFilterChange={setSelectedHistoryFilter}
+            historyLoading={historyLoading}
+            filteredHistory={filteredHistory}
+            formatHistorySummary={formatHistorySummary}
+            hasUnknownHistory={hasUnknownHistory}
+          />
 
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center">
-                <BarChart3 className="mr-2 h-5 w-5" />
-                Performance Statistics
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              {metricsLoading ? (
-                <p className="text-sm text-muted-foreground">Loading metrics…</p>
-              ) : metricsErr ? (
-                <p className="text-sm text-red-600">{metricsErr}</p>
-              ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Metric</TableHead>
-                      <TableHead>Value</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    <TableRow>
-                      <TableCell>Overall Similarity</TableCell>
-                      <TableCell>
-                        {metrics?.similarity_overall != null
-                          ? `${(metrics.similarity_overall * 100).toFixed(1)}%`
-                          : "—"}
-                      </TableCell>
-                    </TableRow>
-                    <TableRow>
-                      <TableCell>Position Similarity</TableCell>
-                      <TableCell>
-                        {metrics?.similarity_pos != null
-                          ? `${(metrics.similarity_pos * 100).toFixed(1)}%`
-                          : "—"}
-                      </TableCell>
-                    </TableRow>
-                    <TableRow>
-                      <TableCell>Amplitude Similarity</TableCell>
-                      <TableCell>
-                        {metrics?.similarity_amp != null
-                          ? `${(metrics.similarity_amp * 100).toFixed(1)}%`
-                          : "—"}
-                      </TableCell>
-                    </TableRow>
-                    <TableRow>
-                      <TableCell>Speed Similarity</TableCell>
-                      <TableCell>
-                        {metrics?.similarity_spd != null
-                          ? `${(metrics.similarity_spd * 100).toFixed(1)}%`
-                          : "—"}
-                      </TableCell>
-                    </TableRow>
-                    <TableRow>
-                      <TableCell>Positional DTW Distance</TableCell>
-                      <TableCell>
-                        {metrics?.distance_pos != null
-                          ? metrics.distance_pos.toFixed(3)
-                          : "—"}
-                      </TableCell>
-                    </TableRow>
-                    <TableRow>
-                      <TableCell>Avg. Step Cost</TableCell>
-                      <TableCell>
-                        {metrics?.avg_step_pos != null
-                          ? metrics.avg_step_pos.toFixed(4)
-                          : "—"}
-                      </TableCell>
-                    </TableRow>
-                    <TableRow>
-                      <TableCell>Live Frames</TableCell>
-                      <TableCell>
-                        {sessions.find((s) => s.session_id === sessionId)?.live_len ?? "—"}
-                      </TableCell>
-                    </TableRow>
-                    <TableRow>
-                      <TableCell>Reference Frames</TableCell>
-                      <TableCell>
-                        {sessions.find((s) => s.session_id === sessionId)?.ref_len ?? "—"}
-                      </TableCell>
-                    </TableRow>
-                  </TableBody>
-                </Table>
-              )}
-            </CardContent>
-          </Card>
+          <PerformanceStatisticsCard
+            metricsLoading={metricsLoading}
+            metricsErr={metricsErr}
+            metrics={metrics}
+            sessions={sessions}
+            sessionId={sessionId}
+          />
         </div>
 
         {/* ====== ML UPDRS Stage Prediction ====== */}
         <div className="col-span-12">
-          <Card className="border-2 border-amber-200 dark:border-amber-800">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Brain className="h-5 w-5 text-amber-600 dark:text-amber-400" />
-                AI-Predicted UPDRS Motor Stage
-              </CardTitle>
-              {/* Prominent disclaimer */}
-              <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-700 dark:bg-amber-950">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
-                <span className="text-amber-800 dark:text-amber-300">
-                  <strong>This is an AI model estimate and may be incorrect.</strong> It was
-                  trained on a limited dataset and reliably predicts only UPDRS stages&nbsp;1–3.
-                  Stage&nbsp;0 predictions are experimental. Do not use this result as a clinical
-                  diagnosis. Always consult a qualified clinician.
-                </span>
-              </div>
-            </CardHeader>
-            <CardContent>
-              {mlLoading ? (
-                <p className="text-sm text-muted-foreground">Running model…</p>
-              ) : mlErr ? (
-                <p className="text-sm text-red-600">{mlErr}</p>
-              ) : !mlPrediction ? (
-                <p className="text-sm text-muted-foreground">
-                  Select a test and session above to run the prediction.
-                </p>
-              ) : (
-                <div className="space-y-5">
-                  {/* Main result banner */}
-                  <div className="flex flex-col items-center gap-1 rounded-lg bg-muted py-6">
-                    <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground">
-                      Predicted Stage
-                    </p>
-                    <p className="text-5xl font-bold text-amber-700 dark:text-amber-400">
-                      {mlPrediction.severity}
-                    </p>
-                    <p className="text-sm text-muted-foreground">
-                      Confidence:{" "}
-                      <span className="font-medium">
-                        {(mlPrediction.confidence * 100).toFixed(1)}%
-                      </span>
-                    </p>
-                  </div>
-
-                  {/* Per-class probabilities */}
-                  <div>
-                    <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                      Class Probabilities
-                    </p>
-                    <div className="space-y-2">
-                      {Object.entries(mlPrediction.probabilities)
-                        .sort(([a], [b]) => Number(a) - Number(b))
-                        .map(([stage, prob]) => {
-                          const pct = (prob * 100).toFixed(1);
-                          const isTop =
-                            Number(stage) === mlPrediction.predicted_updrs_stage;
-                          return (
-                            <div key={stage} className="flex items-center gap-3">
-                              <span className="w-16 shrink-0 text-xs text-muted-foreground">
-                                Stage {stage}
-                              </span>
-                              <div className="flex-1 overflow-hidden rounded-full bg-muted">
-                                <div
-                                  className={`h-2 rounded-full transition-all ${
-                                    isTop
-                                      ? "bg-amber-500"
-                                      : "bg-slate-400 dark:bg-slate-600"
-                                  }`}
-                                  style={{ width: `${pct}%` }}
-                                />
-                              </div>
-                              <span
-                                className={`w-12 text-right text-xs tabular-nums ${
-                                  isTop
-                                    ? "font-semibold text-amber-700 dark:text-amber-400"
-                                    : "text-muted-foreground"
-                                }`}
-                              >
-                                {pct}%
-                              </span>
-                            </div>
-                          );
-                        })}
-                    </div>
-                  </div>
-
-                  {/* Confirm / Adjust button — only when a prediction exists */}
-                  {mlPrediction && testKey && sessionId && (
-                    <div className="flex items-center justify-end pt-2">
-                      {labelResult ? (
-                        <div className="flex items-center gap-2 rounded-md border border-green-300 bg-green-50 px-4 py-2 text-sm text-green-800 dark:border-green-700 dark:bg-green-950 dark:text-green-300">
-                          <CheckCircle2 className="h-4 w-4" />
-                          Stage {labelResult.stage} confirmed
-                          {labelResult.source === "doctor_correction" ? " (corrected)" : ""} and saved for training.
-                        </div>
-                      ) : (
-                        <Button
-                          variant="outline"
-                          className="gap-2 border-amber-400 text-amber-700 hover:bg-amber-50 dark:border-amber-600 dark:text-amber-400"
-                          onClick={() => {
-                            setLabelStage(mlPrediction.predicted_updrs_stage + 1);
-                            setLabelNotes("");
-                            setLabelDialogOpen(true);
-                          }}
-                        >
-                          <Pencil className="h-4 w-4" />
-                          Confirm / Adjust Stage
-                        </Button>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-            </CardContent>
-          </Card>
+          <MlPredictionCard
+            mlLoading={mlLoading}
+            mlErr={mlErr}
+            mlPrediction={mlPrediction}
+            canConfirm={!!mlPrediction && !!testKey && !!sessionId}
+            labelResult={labelResult}
+            onOpenLabelDialog={() => {
+              if (!mlPrediction) return;
+              setLabelStage(mlPrediction.predicted_updrs_stage + 1);
+              setLabelNotes("");
+              setLabelDialogOpen(true);
+            }}
+          />
         </div>
 
-        {/* ====== Confirm / Adjust Stage Dialog ====== */}
-        <Dialog open={labelDialogOpen} onOpenChange={setLabelDialogOpen}>
-          <DialogContent className="max-w-md">
-            <DialogHeader>
-              <DialogTitle className="flex items-center gap-2">
-                <Brain className="h-5 w-5 text-amber-600" />
-                Confirm or Adjust AI-Predicted Stage
-              </DialogTitle>
-              <DialogDescription className="text-sm text-muted-foreground">
-                Review the model's suggestion and select the clinically correct
-                UPDRS stage. Your selection will update the patient record and
-                be saved as labelled training data to improve the model over
-                time.
-              </DialogDescription>
-            </DialogHeader>
-
-            <div className="space-y-4 py-2">
-              {/* AI suggestion reminder */}
-              {mlPrediction && (
-                <div className="rounded-md border bg-muted/50 px-4 py-2 text-sm">
-                  <span className="text-muted-foreground">AI suggested: </span>
-                  <span className="font-semibold">{mlPrediction.severity}</span>
-                  <span className="text-muted-foreground ml-2">
-                    ({(mlPrediction.confidence * 100).toFixed(1)}% confidence)
-                  </span>
-                </div>
-              )}
-
-              {/* Stage selector */}
-              <div className="space-y-1.5">
-                <Label htmlFor="stage-select">Confirmed UPDRS Stage</Label>
-                <Select
-                  value={String(labelStage)}
-                  onValueChange={(v) => setLabelStage(Number(v))}
-                >
-                  <SelectTrigger id="stage-select">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {[1, 2, 3, 4, 5].map((s) => (
-                      <SelectItem key={s} value={String(s)}>
-                        Stage {s}
-                        {mlPrediction && s === mlPrediction.predicted_updrs_stage + 1
-                          ? " (AI suggested)"
-                          : ""}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {/* Optional notes */}
-              <div className="space-y-1.5">
-                <Label htmlFor="label-notes">
-                  Clinical notes{" "}
-                  <span className="font-normal text-muted-foreground">(optional)</span>
-                </Label>
-                <Textarea
-                  id="label-notes"
-                  placeholder="e.g. Patient showed mild tremor, AI over-estimated severity…"
-                  rows={3}
-                  value={labelNotes}
-                  onChange={(e) => setLabelNotes(e.target.value)}
-                />
-              </div>
-
-              {/* Disclaimer */}
-              <p className="text-xs text-muted-foreground">
-                This action will update the patient's severity record and
-                archive this session as labelled training data.
-              </p>
-            </div>
-
-            <DialogFooter className="gap-2">
-              <Button
-                variant="outline"
-                onClick={() => setLabelDialogOpen(false)}
-                disabled={labelSubmitting}
-              >
-                Cancel
-              </Button>
-              <Button
-                disabled={labelSubmitting || !testKey || !sessionId}
-                onClick={async () => {
-                  if (!testKey || !sessionId) return;
-                  setLabelSubmitting(true);
-                  try {
-                    const res = await fetch(
-                      `/api/dtw/sessions/${encodeURIComponent(testKey)}/${encodeURIComponent(sessionId)}/label`,
-                      {
-                        method: "PATCH",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                          confirmed_stage: labelStage,
-                          patient_id: id ?? null,
-                          notes: labelNotes.trim() || null,
-                        }),
-                      }
-                    );
-                    const json = await res.json();
-                    if (!res.ok) throw new Error(json?.detail || "Server error");
-                    setLabelResult({ stage: labelStage, source: json.label_source });
-                    setLabelDialogOpen(false);
-                  } catch (e: any) {
-                    alert(`Failed to save label: ${e?.message ?? e}`);
-                  } finally {
-                    setLabelSubmitting(false);
-                  }
-                }}
-              >
-                {labelSubmitting ? "Saving…" : "Confirm Stage"}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+        <DoctorLabelDialog
+          open={labelDialogOpen}
+          onOpenChange={setLabelDialogOpen}
+          mlPrediction={mlPrediction}
+          labelStage={labelStage}
+          onLabelStageChange={setLabelStage}
+          labelNotes={labelNotes}
+          onLabelNotesChange={setLabelNotes}
+          labelSubmitting={labelSubmitting}
+          onConfirm={async () => {
+            if (!testKey || !sessionId) return;
+            setLabelSubmitting(true);
+            const response = await labelDtwSession(testKey, sessionId, {
+              confirmed_stage: labelStage,
+              patient_id: id ?? null,
+              notes: labelNotes.trim() || null,
+            });
+            if (response.success && response.data) {
+              setLabelResult({ stage: labelStage, source: response.data.label_source });
+              setLabelDialogOpen(false);
+            } else {
+              toast({
+                title: 'Failed to Save Label',
+                description: response.error ?? 'Unknown error',
+                variant: 'destructive',
+              });
+            }
+            setLabelSubmitting(false);
+          }}
+        />
 
         {/* ====== Bottom row: Full-width DTW card with KPIs ====== */}
         <div className="col-span-12">
@@ -1444,7 +998,7 @@ const VideoSummary = () => {
                 tickCount={5}
                 padding={{ left: 8, right: 8 }}
               >
-                <Label
+                <RechartsLabel
                   value="DTW path step"
                   offset={-4}
                   position="insideBottom"
@@ -1498,4 +1052,3 @@ const VideoSummary = () => {
 };
 
 export default VideoSummary;
-

@@ -41,7 +41,7 @@ export interface Test {
   id: string;
   patientId: string;
   name: string;
-  type: 'stand-and-sit' | 'finger-tapping' | 'fist-open-close';
+  type: 'stand-and-sit' | 'finger-tapping' | 'fist-open-close' | 'unknown';
   date: Date;
   status: 'completed' | 'in-progress' | 'pending';
   videoUrl?: string;
