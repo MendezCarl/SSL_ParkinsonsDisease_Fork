@@ -1,7 +1,5 @@
-# =========================================================
 # Logs
-# =========================================================
-logs
+logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
@@ -9,42 +7,39 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-# =========================================================
-# Dependencies / Build Artifacts
-# =========================================================
+# Dependencies / build artifacts
 node_modules/
 dist/
 dist-ssr/
-*.tgz
-*.tar.gz
-
-# Next.js / React / Vue
 .next/
 out/
 coverage/
+*.tgz
+*.tar.gz
 
 # Python
 __pycache__/
 *.pyc
+.pytest_cache/
 venv/
 .venv/
 *.egg-info/
 
-# Databases
+# Local databases and generated binary assets
 *.db
-*.mov
+*.npz
 *.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
 
-# =========================================================
-# Environment / Local Config
-# =========================================================
+# Environment / local config
 *.local
 .env
 .env.*
 
-# =========================================================
 # Editor / IDE
-# =========================================================
 .vscode/*
 !.vscode/extensions.json
 .idea/
@@ -53,45 +48,30 @@ venv/
 *.njsproj
 *.sln
 *.sw?
+SSL_ParkinsonsDisease_Fork.code-workspace
 
-#DB Files
-*.db
-
-#python-compiler
-*.pyc
-
-# #json files
-# *.json removed because it would mess up the package.json
-
-#media files
-*.mp4
-*.mkv
-*.avi
-*.mov
-# =========================================================
 # OS-specific
-# =========================================================
 .DS_Store
 Thumbs.db
 ehthumbs.db
 
-*.npz
-*.mp4
-*.mov
-*.avi
-*.npz
-=======
-/backend/__pycache__
-backend/__pycache__/patient_manager.cpython-310.pyc
-SSL_ParkinsonsDisease_Fork.code-workspace
-backend/__pycache__/patient_manager.cpython-310.pyc
-backend/__pycache__/patient_manager.cpython-310.pyc
+# Temporary or accidental local files
 frontend/src/pages/VideoRecording copy.tsx
-/backend/recordings
-/backend/dtw_runs/finger-tapping
-/backend/dtw_runs/fist-open-close
 
-# data files
-backend/patients.json
-backend/patients.json.backupmeta.json
-test_history.json
+# Backend runtime data
+backend/data/app.db
+backend/data/test.db
+backend/data/test_history.json
+backend/data/dtw_runs/
+backend/data/labelled_training_data/
+backend/data/recordings/
+backend/data/templates/
+backend/data/jsons/
+
+# Legacy source-adjacent generated paths kept during migration review
+backend/recordings/
+backend/jsons/
+backend/routes/dtw_runs/
+backend/routes/_labelled_training_data/
+backend/routes/recordings/
+backend/routes/templates/

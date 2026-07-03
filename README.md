@@ -29,13 +29,13 @@ A web-based clinical tool for administering motor-function tests, scoring them w
    └──────────┬──────────┘
               │ keypoints (T × 24)
    ┌──────────▼──────────┐
-   │   DTW Engine        │     dtw_runs/<test>/<session_id>/
+   │   DTW Engine        │     data/dtw_runs/<test>/<session_id>/
    │   (tslearn)         │     ├─ dtw_artifacts.npz
    │   vs healthy NPZ    │     └─ meta.json
    └──────────┬──────────┘
               │
    ┌──────────▼──────────┐
-   │  LSTM-MIL Classifier│     _labelled_training_data/<test>/stage_N/<session>/
+   │  LSTM-MIL Classifier│     data/labelled_training_data/<test>/stage_N/<session>/
    │  (T×24 → Stage 0-3) │     ← doctor-labelled sessions archived here
    └─────────────────────┘
 ```
@@ -60,7 +60,8 @@ A web-based clinical tool for administering motor-function tests, scoring them w
 │   ├── repo/                 SQLAlchemy models, DB session, Excel import
 │   ├── schema/               Pydantic schemas (patient, visit, classifier)
 │   ├── ml/                   MIL bag-level classifier module
-│   ├── Camera/               Standalone camera utilities
+│   ├── data/                 Runtime-generated artifacts and local DB files
+│   ├── legacy/               Archived scripts, camera utilities, and flat files
 │   ├── healthy_data/         Healthy reference videos (per-test subdirs)
 │   ├── models/               MediaPipe .task files
 │   │   ├── hand_landmarker.task
@@ -159,7 +160,7 @@ After a patient session is processed:
 3. The frontend calls `PATCH /api/dtw/sessions/{test}/{session_id}/label`.
 4. The backend:
    - Updates `meta.json` in the session folder with `doctor_confirmed_stage`, timestamp, `label_source` (`doctor_confirmed` or `doctor_correction`), and optional notes.
-   - Copies the session artifacts to `backend/routes/_labelled_training_data/<test>/stage_<N>/<session_id>/` for future model retraining.
+   - Copies the session artifacts to `backend/data/labelled_training_data/<test>/stage_<N>/<session_id>/` for future model retraining.
    - Updates the patient's severity field if `patient_id` is provided.
 
 ---

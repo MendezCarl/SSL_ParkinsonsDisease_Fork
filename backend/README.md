@@ -81,7 +81,7 @@ curl -L "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_la
 
 ### DTW Sessions  `/dtw`
 
-Session artifacts are stored at `backend/routes/dtw_runs/<test_name>/<session_id>/`:
+Session artifacts are stored at `backend/data/dtw_runs/<test_name>/<session_id>/`:
 - `dtw_artifacts.npz` — `X_live`, `Y_ref`, warp paths, costs
 - `meta.json` — timestamps, DTW scores, ML/doctor labels
 
@@ -122,12 +122,12 @@ Response:
   "session_id": "...",
   "confirmed_stage": 2,
   "label_source": "doctor_correction",
-  "training_copy": ".../_labelled_training_data/finger-tapping/stage_2/<session_id>",
+  "training_copy": ".../backend/data/labelled_training_data/finger-tapping/stage_2/<session_id>",
   "patient_updated": true
 }
 ```
 
-`label_source` is `"doctor_confirmed"` when the doctor's choice matches the ML prediction, or `"doctor_correction"` when they differ. The session folder is copied to `_labelled_training_data/<test>/stage_<N>/<session_id>/` for future model retraining.
+`label_source` is `"doctor_confirmed"` when the doctor's choice matches the ML prediction, or `"doctor_correction"` when they differ. The session folder is copied to `backend/data/labelled_training_data/<test>/stage_<N>/<session_id>/` for future model retraining.
 
 ### ML Inference  `/ml`
 
@@ -202,7 +202,7 @@ python process_healthy_videos.py --no-rebuild-template  # skip template rebuild 
 ```
 
 Source videos: `backend/healthy_data/<test-type>/`  
-Generated templates: `backend/routes/templates/<test-type>.npz`
+Generated templates: `backend/data/templates/<test-type>.npz`
 
 Supported test types: `finger-tapping`, `fist-open-close`, `stand-and-sit`
 
@@ -212,13 +212,18 @@ Supported test types: `finger-tapping`, `fist-open-close`, `stand-and-sit`
 
 | Path | Contents |
 |---|---|
-| `routes/dtw_runs/<test>/<session>/` | Live DTW session artifacts |
-| `routes/_labelled_training_data/<test>/stage_N/<session>/` | Doctor-labelled training archive |
-| `routes/recordings/` | Uploaded patient videos |
+| `data/dtw_runs/<test>/<session>/` | Live DTW session artifacts |
+| `data/labelled_training_data/<test>/stage_N/<session>/` | Doctor-labelled training archive |
+| `data/recordings/` | Uploaded patient videos |
+| `data/templates/<test>/` | Generated DTW reference templates |
+| `data/jsons/` | Extracted keypoint JSON artifacts |
+| `data/test_history.json` | Active test history flat store |
 | `healthy_data/<test>/` | Healthy reference videos |
 | `models/` | MediaPipe `.task` files |
-| `patients.json` | Legacy flat-file patient store |
-| `test_history.json` | Test history flat store |
+| `data/app.db` | Active SQLite database used by `patient_manager.py` |
+| `data/test.db` | Legacy/staging SQLite database path still defined in `repo/db.py` |
+| `legacy/data/patients.json` | Archived flat-file patient store |
+| `legacy/data/patients.json.backup` | Archived backup of the flat-file patient store |
 
 ---
 
@@ -226,6 +231,8 @@ Supported test types: `finger-tapping`, `fist-open-close`, `stand-and-sit`
 
 SQLite via SQLAlchemy 2.0. Session factory: `patient_manager.SessionLocal`.  
 Models: `repo/sql_models.py` — `User`, `Patient`, `Visit`, `TestResult`.
+
+The default runtime database path is now `backend/data/app.db`. The repository-root `app.db` is left in place for audit and possible later removal.
 
 Excel import utility: `repo/excel_to_repository.py`  
 Expected sheets: `patients`, `visits`, `test_results` (see column names in that file).
@@ -254,5 +261,4 @@ python -m pytest -q tests/
 4. Predict-only mode (`persist_update=false`)
 5. Request validation failure (422)
 6. Missing checkpoint (500)
-
 

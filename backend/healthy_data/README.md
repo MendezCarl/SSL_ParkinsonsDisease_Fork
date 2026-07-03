@@ -29,7 +29,7 @@ python process_healthy_videos.py --no-rebuild-template
 
 1. Iterates over videos in each subfolder.
 2. Runs MediaPipe Hands (finger-tapping, fist-open-close) or MediaPipe Pose (stand-and-sit) on every frame.
-3. Saves raw landmark data to `backend/jsons/<video_stem>_<timestamp>.json` — same format as the existing `tap_*.json` files.
-4. Resamples all recordings to a common length and averages them into a single reference template at `backend/routes/templates/<test>/hands.npz` (or `pose.npz`).
+3. Saves raw landmark data to `backend/data/jsons/<video_stem>_<timestamp>.json` — same format as the existing `tap_*.json` files.
+4. Resamples all recordings to a common length and averages them into a single reference template at `backend/data/templates/<test>/hands.npz` (or `pose.npz`).
 
 Already-extracted videos are cached by JSON name — use `--force` to re-run them.
