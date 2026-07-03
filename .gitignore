@@ -75,3 +75,6 @@ backend/routes/dtw_runs/
 backend/routes/_labelled_training_data/
 backend/routes/recordings/
 backend/routes/templates/
+
+# Legacy model files
+backend/lstm_classifier.legacy_incompatible.pt
