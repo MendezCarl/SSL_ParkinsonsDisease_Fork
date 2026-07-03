@@ -1,0 +1,557 @@
+{
+  "johnd1755555241": {
+    "patient_id": "johnd1755555241",
+    "name": "John Doe",
+    "birthDate": "1965-05-19",
+    "height": "170.0",
+    "weight": "70.0",
+    "lab_results": {},
+    "doctors_notes": "",
+    "severity": "Stage 2",
+    "lab_results_history": [
+      {
+        "id": "lab_1",
+        "date": "2025-09-15T10:00:00.000Z",
+        "results": "CBC: Normal, Dopamine markers: Elevated (120 ng/mL), Glucose: 95 mg/dL",
+        "added_by": "Dr. Smith"
+      },
+      {
+        "id": "lab_2",
+        "date": "2025-08-01T14:30:00.000Z",
+        "results": "CBC: Normal, Dopamine markers: 105 ng/mL, Cholesterol: 180 mg/dL",
+        "added_by": "Dr. Johnson"
+      }
+    ],
+    "doctors_notes_history": [
+      {
+        "id": "note_1",
+        "date": "2025-09-20T09:15:00.000Z",
+        "note": "Patient shows improvement with current medication. Tremor reduced significantly.",
+        "added_by": "Dr. Smith"
+      },
+      {
+        "id": "note_2",
+        "date": "2025-08-15T16:45:00.000Z",
+        "note": "Started on new L-DOPA regimen. Monitor for side effects.",
+        "added_by": "Dr. Johnson"
+      }
+    ]
+  },
+  "marys2844332156": {
+    "patient_id": "marys2844332156",
+    "name": "Mary Smith",
+    "birthDate": "1953-03-15",
+    "height": "165.0",
+    "weight": "68.5",
+    "lab_results": {},
+    "doctors_notes": "",
+    "severity": "Stage 2",
+    "lab_results_history": [
+      {
+        "id": "lab_mary_1",
+        "date": "2025-09-10T14:30:00Z",
+        "results": "CBC: Normal, Dopamine markers: 95 ng/mL, Blood pressure: 120/80",
+        "added_by": "Dr. Martinez"
+      }
+    ],
+    "doctors_notes_history": [
+      {
+        "id": "note_mary_1",
+        "date": "2025-09-12T11:00:00Z",
+        "note": "Early stage tremor, responds well to medication. Consider physical therapy.",
+        "added_by": "Dr. Martinez"
+      },
+      {
+        "id": "note_mary_2",
+        "date": "2025-08-05T10:15:00Z",
+        "note": "Initial diagnosis confirmed. Starting low-dose carbidopa-levodopa.",
+        "added_by": "Dr. Wilson"
+      }
+    ]
+  },
+  "johns1759999595": {
+    "patient_id": "johns1759999595",
+    "name": "John Smith",
+    "birthDate": "",
+    "height": "175.0",
+    "weight": "75.0",
+    "lab_results": {},
+    "doctors_notes": "",
+    "severity": "Stage 3",
+    "lab_results_history": [
+      {
+        "id": "lab_robert_1",
+        "date": "2025-09-25T09:45:00Z",
+        "results": "CBC: Normal, Dopamine markers: 145 ng/mL, Liver function: Normal",
+        "added_by": "Dr. Chen"
+      },
+      {
+        "id": "lab_robert_2",
+        "date": "2025-07-20T13:20:00Z",
+        "results": "CBC: Normal, Dopamine markers: 140 ng/mL, Kidney function: Normal",
+        "added_by": "Dr. Chen"
+      }
+    ],
+    "doctors_notes_history": [
+      {
+        "id": "note_robert_1",
+        "date": "2025-09-26T15:30:00Z",
+        "note": "Moderate bradykinesia, some rigidity. Adjusting medication dosage.",
+        "added_by": "Dr. Chen"
+      },
+      {
+        "id": "note_robert_2",
+        "date": "2025-07-22T14:45:00Z",
+        "note": "Symptoms progressing slowly. Patient handling well with current treatment.",
+        "added_by": "Dr. Chen"
+      }
+    ]
+  },
+  "testu1761296994": {
+    "patient_id": "testu1761296994",
+    "name": "Test User",
+    "birthDate": "1980-01-01",
+    "height": "170.0",
+    "weight": "70.0",
+    "lab_results": {},
+    "doctors_notes": "",
+    "severity": "Stage 5",
+    "lab_results_history": [
+      {
+        "id": "lab_linda_1",
+        "date": "2025-09-18T16:00:00Z",
+        "results": "CBC: Normal, Dopamine markers: 180 ng/mL, Balance assessment: Abnormal",
+        "added_by": "Dr. Thompson"
+      }
+    ],
+    "doctors_notes_history": [
+      {
+        "id": "note_linda_1",
+        "date": "2025-09-20T10:30:00Z",
+        "note": "Postural instability worsening. Falls risk assessment completed - high risk. Recommended occupational therapy and home safety evaluation.",
+        "added_by": "Dr. Thompson"
+      },
+      {
+        "id": "note_linda_2",
+        "date": "2025-08-28T08:45:00Z",
+        "note": "Patient reports two falls this month. Adjusting medication and referring to PT.",
+        "added_by": "Dr. Thompson"
+      },
+      {
+        "id": "note_linda_3",
+        "date": "2025-07-15T14:20:00Z",
+        "note": "Balance issues becoming more prominent. Consider adding amantadine.",
+        "added_by": "Dr. Rodriguez"
+      }
+    ]
+  },
+  "uites1761297371": {
+    "patient_id": "uites1761297371",
+    "name": "UI Test User 1761297371",
+    "birthDate": "1990-01-01",
+    "height": "170.0",
+    "weight": "70.0",
+    "lab_results": {},
+    "doctors_notes": "",
+    "severity": "Stage 5",
+    "lab_results_history": [
+      {
+        "id": "lab_david_1",
+        "date": "2025-09-14T11:30:00Z",
+        "results": "CBC: Normal, Dopamine markers: 185 ng/mL, Neurological assessment: Progressive decline noted",
+        "added_by": "Dr. Anderson"
+      }
+    ],
+    "doctors_notes_history": [
+      {
+        "id": "note_david_1",
+        "date": "2025-09-16T14:15:00Z",
+        "note": "Progressive symptoms over 8 years continuing to advance. Considering advanced treatment options including DBS evaluation.",
+        "added_by": "Dr. Anderson"
+      },
+      {
+        "id": "note_david_2",
+        "date": "2025-07-28T09:45:00Z",
+        "note": "Disease progression evident since initial diagnosis. Motor fluctuations becoming more pronounced.",
+        "added_by": "Dr. Anderson"
+      }
+    ]
+  },
+  "susand6789123457": {
+    "patient_id": "susand6789123457",
+    "name": "Susan Davis",
+    "birthDate": "1967-09-12",
+    "height": "168.0",
+    "weight": "65.0",
+    "lab_results": {},
+    "doctors_notes": "",
+    "severity": "Stage 1",
+    "lab_results_history": [],
+    "doctors_notes_history": []
+  },
+  "johnd1761328672": {
+    "patient_id": "johnd1761328672",
+    "name": "John Doe",
+    "birthDate": null,
+    "height": "0.0",
+    "weight": "0.0",
+    "lab_results": {},
+    "doctors_notes": "",
+    "severity": "Stage 3",
+    "lab_results_history": [
+      {
+        "id": "lab_michael_1",
+        "date": "2025-09-05T11:15:00Z",
+        "results": "CBC: Normal, Dopamine markers: 130 ng/mL, Gait analysis: Freezing episodes documented",
+        "added_by": "Dr. Park"
+      },
+      {
+        "id": "lab_michael_2",
+        "date": "2025-06-20T09:30:00Z",
+        "results": "CBC: Normal, Dopamine markers: 125 ng/mL, Cardiac function: Normal",
+        "added_by": "Dr. Park"
+      }
+    ],
+    "doctors_notes_history": [
+      {
+        "id": "note_michael_1",
+        "date": "2025-09-08T13:45:00Z",
+        "note": "Freezing episodes during gait more frequent. Discussed cueing strategies and rhythm therapy.",
+        "added_by": "Dr. Park"
+      },
+      {
+        "id": "note_michael_2",
+        "date": "2025-06-25T16:20:00Z",
+        "note": "First occurrence of freezing episodes noted. Patient education provided on management techniques.",
+        "added_by": "Dr. Park"
+      }
+    ]
+  },
+  "nancyw8321654987": {
+    "patient_id": "nancyw8321654987",
+    "name": "Nancy Wilson",
+    "birthDate": "1959-08-27",
+    "height": "160.0",
+    "weight": "72.0",
+    "lab_results": {},
+    "doctors_notes": "",
+    "severity": "Stage 3",
+    "lab_results_history": [],
+    "doctors_notes_history": []
+  },
+  "alber1761328672": {
+    "patient_id": "alber1761328672",
+    "name": "Albert Johnson",
+    "birthDate": null,
+    "height": "0.0",
+    "weight": "0.0",
+    "lab_results": {},
+    "doctors_notes": "",
+    "severity": "Stage 3",
+    "lab_results_history": [],
+    "doctors_notes_history": []
+  },
+  "emily1761328673": {
+    "patient_id": "emily1761328673",
+    "name": "Emily Davis",
+    "birthDate": null,
+    "height": "0.0",
+    "weight": "0.0",
+    "lab_results": {},
+    "doctors_notes": "",
+    "severity": "Stage 2",
+    "lab_results_history": [
+      {
+        "id": "lab_patricia_1",
+        "date": "2025-09-30T10:00:00Z",
+        "results": "Post-DBS evaluation: Excellent motor improvement, Battery check: Normal",
+        "added_by": "Dr. Singh"
+      },
+      {
+        "id": "lab_patricia_2",
+        "date": "2025-07-15T14:30:00Z",
+        "results": "DBS programming session: Optimal settings achieved, Tremor: Significantly reduced",
+        "added_by": "Dr. Singh"
+      }
+    ],
+    "doctors_notes_history": [
+      {
+        "id": "note_patricia_1",
+        "date": "2025-09-30T11:15:00Z",
+        "note": "Excellent response to DBS therapy continues. Quality of life significantly improved. Next device check in 6 months.",
+        "added_by": "Dr. Singh"
+      },
+      {
+        "id": "note_patricia_2",
+        "date": "2025-07-20T09:45:00Z",
+        "note": "DBS programming optimized. Patient reports 80% improvement in tremor control.",
+        "added_by": "Dr. Singh"
+      },
+      {
+        "id": "note_patricia_3",
+        "date": "2025-05-10T15:30:00Z",
+        "note": "DBS surgery successful. Initial programming session scheduled.",
+        "added_by": "Dr. Kumar"
+      }
+    ]
+  },
+  "charlesg2345678901": {
+    "patient_id": "charlesg2345678901",
+    "name": "Charles Garcia",
+    "birthDate": "1958-12-05",
+    "height": "180.0",
+    "weight": "80.0",
+    "lab_results": {},
+    "doctors_notes": "",
+    "severity": "Stage 5",
+    "lab_results_history": [
+      {
+        "id": "lab_charles_1",
+        "date": "2025-09-22T08:30:00Z",
+        "results": "CBC: Normal, Dopamine markers: 200 ng/mL, Bilateral motor assessment: Severely impaired",
+        "added_by": "Dr. Lee"
+      },
+      {
+        "id": "lab_charles_2",
+        "date": "2025-08-10T15:45:00Z",
+        "results": "CBC: Normal, Dopamine markers: 195 ng/mL, Cognitive assessment: Mild decline",
+        "added_by": "Dr. Lee"
+      }
+    ],
+    "doctors_notes_history": [
+      {
+        "id": "note_charles_1",
+        "date": "2025-09-24T14:20:00Z",
+        "note": "Bilateral symptoms worsening. Increased medication dosage and added COMT inhibitor. Consider advanced therapies.",
+        "added_by": "Dr. Lee"
+      },
+      {
+        "id": "note_charles_2",
+        "date": "2025-08-15T10:30:00Z",
+        "note": "Medication adjustment needed due to increased rigidity on both sides. Patient struggling with daily activities.",
+        "added_by": "Dr. Lee"
+      }
+    ]
+  },
+  "barbarah3456789012": {
+    "patient_id": "barbarah3456789012",
+    "name": "Barbara Harris",
+    "birthDate": "1955-10-18",
+    "height": "163.0",
+    "weight": "58.0",
+    "lab_results": {},
+    "doctors_notes": "",
+    "severity": "Stage 4",
+    "lab_results_history": [
+      {
+        "id": "lab_1",
+        "date": "2025-01-10T14:30:00Z",
+        "results": {
+          "levodopa_level": "4.2 ng/mL",
+          "blood_pressure": "145/85 mmHg",
+          "heart_rate": "72 bpm"
+        },
+        "added_by": "Dr. Wilson"
+      }
+    ],
+    "doctors_notes_history": [
+      {
+        "id": "note_1",
+        "date": "2024-11-15T10:45:00Z",
+        "note": "Patient showing progressive speech difficulties. Recommend speech therapy evaluation.",
+        "added_by": "Dr. Wilson"
+      },
+      {
+        "id": "note_2",
+        "date": "2025-01-10T14:30:00Z",
+        "note": "Speech difficulties developing as expected with disease progression. Starting speech therapy next week.",
+        "added_by": "Dr. Wilson"
+      }
+    ]
+  },
+  "thomast4567890123": {
+    "patient_id": "thomast4567890123",
+    "name": "Thomas Taylor",
+    "birthDate": "1961-03-24",
+    "height": "176.0",
+    "weight": "78.0",
+    "lab_results": {},
+    "doctors_notes": "",
+    "severity": "Stage 1",
+    "lab_results_history": [
+      {
+        "id": "lab_1",
+        "date": "2025-01-08T09:15:00Z",
+        "results": {
+          "levodopa_level": "3.8 ng/mL",
+          "blood_pressure": "125/75 mmHg",
+          "heart_rate": "68 bpm",
+          "total_cholesterol": "185 mg/dL"
+        },
+        "added_by": "Dr. Martinez"
+      }
+    ],
+    "doctors_notes_history": [
+      {
+        "id": "note_1",
+        "date": "2024-10-20T11:30:00Z",
+        "note": "Patient continues regular exercise routine. Golf 3x weekly, walking daily.",
+        "added_by": "Dr. Martinez"
+      },
+      {
+        "id": "note_2",
+        "date": "2025-01-08T09:15:00Z",
+        "note": "Active lifestyle maintained despite diagnosis. Excellent physical condition for age and condition.",
+        "added_by": "Dr. Martinez"
+      }
+    ]
+  },
+  "elizabethc5678901234": {
+    "patient_id": "elizabethc5678901234",
+    "name": "Elizabeth Clark",
+    "birthDate": "1950-05-07",
+    "height": "159.0",
+    "weight": "64.0",
+    "lab_results": {},
+    "doctors_notes": "Advanced stage, caregiver support in place",
+    "severity": "Stage 4",
+    "lab_results_history": [],
+    "doctors_notes_history": []
+  },
+  "emily1761328739": {
+    "patient_id": "emily1761328739",
+    "name": "Emily Davis",
+    "birthDate": null,
+    "height": "170.0",
+    "weight": "70.0",
+    "lab_results": {},
+    "doctors_notes": "",
+    "severity": "Stage 2",
+    "lab_results_history": [
+      {
+        "id": "lab_kenneth_1",
+        "date": "2025-09-28T12:00:00Z",
+        "results": "Genetic testing: LRRK2 variant detected, CBC: Normal, Dopamine markers: 110 ng/mL",
+        "added_by": "Dr. Patel"
+      },
+      {
+        "id": "lab_kenneth_2",
+        "date": "2025-07-05T09:15:00Z",
+        "results": "Initial genetic screening ordered, CBC: Normal, Young-onset panel: Pending",
+        "added_by": "Dr. Patel"
+      }
+    ],
+    "doctors_notes_history": [
+      {
+        "id": "note_kenneth_1",
+        "date": "2025-09-30T16:45:00Z",
+        "note": "Genetic testing confirmed LRRK2 variant. Discussed familial implications and genetic counseling referral. Early intervention with exercise program.",
+        "added_by": "Dr. Patel"
+      },
+      {
+        "id": "note_kenneth_2",
+        "date": "2025-07-08T11:20:00Z",
+        "note": "Young onset Parkinson's suspected. Family history positive. Genetic testing initiated.",
+        "added_by": "Dr. Patel"
+      }
+    ]
+  },
+  "deborahw7890123456": {
+    "patient_id": "deborahw7890123456",
+    "name": "Deborah White",
+    "birthDate": "1956-07-09",
+    "height": "166.0",
+    "weight": "67.0",
+    "lab_results": {},
+    "doctors_notes": "Tremor-dominant phenotype",
+    "severity": "Stage 3",
+    "lab_results_history": [],
+    "doctors_notes_history": []
+  },
+  "johnd1761330319": {
+    "patient_id": "johnd1761330319",
+    "name": "John Doe",
+    "birthDate": null,
+    "height": "170.0",
+    "weight": "70.0",
+    "lab_results": {},
+    "doctors_notes": "Non-motor symptoms predominant",
+    "severity": "Stage 3",
+    "lab_results_history": [],
+    "doctors_notes_history": []
+  },
+  "janes1761330319": {
+    "patient_id": "janes1761330319",
+    "name": "Jane Smith",
+    "birthDate": null,
+    "height": "170.0",
+    "weight": "70.0",
+    "lab_results": {},
+    "doctors_notes": "",
+    "severity": "Stage 4",
+    "lab_results_history": [
+      {
+        "id": "lab_helen_1",
+        "date": "2025-09-12T14:45:00Z",
+        "results": "CBC: Normal, Dopamine markers: 135 ng/mL, Depression screening: PHQ-9 score improved to 8",
+        "added_by": "Dr. Williams"
+      }
+    ],
+    "doctors_notes_history": [
+      {
+        "id": "note_helen_1",
+        "date": "2025-09-15T10:00:00Z",
+        "note": "Depression management showing improvement with sertraline. Motor symptoms stable. Continue current regimen.",
+        "added_by": "Dr. Williams"
+      },
+      {
+        "id": "note_helen_2",
+        "date": "2025-08-01T13:30:00Z",
+        "note": "Started antidepressant therapy. Patient education on PD-related depression provided. Follow-up in 6 weeks.",
+        "added_by": "Dr. Williams"
+      },
+      {
+        "id": "note_helen_3",
+        "date": "2025-06-20T15:15:00Z",
+        "note": "Depression symptoms identified during routine visit. PHQ-9 score: 14. Referral to psychiatrist considered.",
+        "added_by": "Dr. Brown"
+      }
+    ]
+  },
+  "markk0123456789": {
+    "patient_id": "markk0123456789",
+    "name": "Mark King",
+    "birthDate": "1965-09-11",
+    "height": "181.0",
+    "weight": "84.0",
+    "lab_results": {},
+    "doctors_notes": "Participating in clinical trial",
+    "severity": "Stage 1",
+    "lab_results_history": [],
+    "doctors_notes_history": []
+  },
+  "emily1761330319": {
+    "patient_id": "emily1761330319",
+    "name": "Emily Davis",
+    "birthDate": null,
+    "height": "170.0",
+    "weight": "70.0",
+    "lab_results": {},
+    "doctors_notes": "Significant motor fluctuations",
+    "severity": "Stage 5",
+    "lab_results_history": [],
+    "doctors_notes_history": []
+  },
+  "micha1761330319": {
+    "patient_id": "micha1761330319",
+    "name": "Michael Brown",
+    "birthDate": null,
+    "height": "170.0",
+    "weight": "70.0",
+    "lab_results": {},
+    "doctors_notes": "Stable on current medication regimen",
+    "severity": "Stage 2",
+    "lab_results_history": [],
+    "doctors_notes_history": []
+  }
+}

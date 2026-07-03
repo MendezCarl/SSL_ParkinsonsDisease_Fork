@@ -1,9 +1,187 @@
-import json
-import os
+from __future__ import annotations
+
 import asyncio
+import os
+import re
+from datetime import datetime, date
+from typing import Any, Dict, List, Optional, Union
+
+import json
 from datetime import datetime
-from typing import Dict, List, Optional, Union
+from sqlalchemy.orm import Session
+from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.orm import sessionmaker, Session
+from fastapi import HTTPException as HttpException
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Union
 import threading
+import copy
+from uuid import uuid4
+
+# --- your models & repos ---
+from repo.sql_models import Base, Patient, LabResult, DoctorNote  # Visit, TestResult defined there as well
+from repo.patient_repository import PatientRepository
+from repo.result_repository import TestResultRepository
+from routes.contracts import (
+    PatientCreate, PatientUpdate,
+    PatientResponse, PatientsListResponse,
+    PatientSearchResponse, FilterCriteria,
+    LabResultOut, DoctorNoteOut, LabResultIn, DoctorNoteIn
+)
+from storage_paths import APP_DB_PATH, TEST_HISTORY_PATH
+
+# ----------------- DB bootstrap -----------------
+DB_URL = os.getenv("DB_URL", f"sqlite:///{APP_DB_PATH.as_posix()}")
+engine = create_engine(DB_URL, future=True)
+SessionLocal = sessionmaker(bind=engine, expire_on_commit=False, autoflush=False, future=True)
+Base.metadata.create_all(engine)
+
+RECORD_NUMBER_PREFIX = "REC-"
+RECORD_NUMBER_WIDTH = 6
+
+
+def _format_record_number(sequence: int) -> str:
+    return f"{RECORD_NUMBER_PREFIX}{sequence:0{RECORD_NUMBER_WIDTH}d}"
+
+
+def _parse_record_number(value: str | None) -> int | None:
+    if not value:
+        return None
+    match = re.fullmatch(rf"{re.escape(RECORD_NUMBER_PREFIX)}(\d+)", value)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def _ensure_patient_record_number_schema() -> None:
+    with engine.begin() as connection:
+        inspector = inspect(connection)
+        if "patients" not in inspector.get_table_names():
+            return
+
+        columns = {column["name"] for column in inspector.get_columns("patients")}
+        if "record_number" not in columns:
+            connection.execute(text("ALTER TABLE patients ADD COLUMN record_number VARCHAR(32)"))
+
+        rows = connection.execute(
+            text("SELECT patient_id, record_number FROM patients ORDER BY rowid")
+        ).mappings().all()
+
+        next_sequence = max((_parse_record_number(row["record_number"]) or 0) for row in rows) + 1 if rows else 1
+
+        for row in rows:
+            if row["record_number"]:
+                continue
+            connection.execute(
+                text("UPDATE patients SET record_number = :record_number WHERE patient_id = :patient_id"),
+                {
+                    "record_number": _format_record_number(next_sequence),
+                    "patient_id": row["patient_id"],
+                },
+            )
+            next_sequence += 1
+
+        indexes = {index["name"] for index in inspect(connection).get_indexes("patients")}
+        if "ix_patients_record_number_unique" not in indexes:
+            connection.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS ix_patients_record_number_unique "
+                    "ON patients (record_number)"
+                )
+            )
+
+
+_ensure_patient_record_number_schema()
+
+# ----------------- Helpers -----------------
+_NUM_RE = re.compile(r"(\d+\.?\d*)")
+_async_lock = asyncio.Lock()
+
+def _parse_number(value, lo: float, hi: float) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        x = float(value)
+    else:
+        m = _NUM_RE.search(str(value))
+        if not m:
+            return None
+        x = float(m.group(1))
+    if not (lo <= x <= hi):
+        return None
+    return x
+
+def _gen_patient_id(name: str) -> str:
+    base = (name or "").lower().replace(" ", "")[:5] or "pt"
+    return f"{base}{int(datetime.now().timestamp())}"
+
+
+def _next_record_number(session: Session) -> str:
+    existing = session.query(Patient.record_number).filter(Patient.record_number.is_not(None)).all()
+    next_sequence = max((_parse_record_number(value) or 0) for (value,) in existing) + 1 if existing else 1
+    return _format_record_number(next_sequence)
+
+
+def _gen_entry_id(prefix: str) -> str:
+    return f"{prefix}_{uuid4().hex}"
+
+def _validate(data: Dict[str, Any]) -> Dict[str, str]:
+    errors: Dict[str, str] = {}
+
+    if "name" in data and data["name"] is not None and not isinstance(data["name"], str):
+        errors["name"] = "Name must be a string"
+
+    if "birthDate" in data:
+        bd = data["birthDate"]
+        if bd:
+            try:
+                date.fromisoformat(str(bd))
+            except Exception:
+                errors["birthDate"] = "birthDate must be YYYY-MM-DD"
+
+    if "height" in data and _parse_number(data["height"], 0, 300) is None:
+        errors["height"] = "Height must be a number between 0 and 300 (cm)"
+
+    if "weight" in data and _parse_number(data["weight"], 0, 500) is None:
+        errors["weight"] = "Weight must be a number between 0 and 500 (kg)"
+
+    if "severity" in data:
+        s = str(data["severity"]).strip()
+        if s.lower() in {"low", "medium", "high"} or re.fullmatch(r"Stage [1-5]", s):
+            pass
+
+_TEST_NAME_ALIASES = {
+    "stand-and-sit": "stand-and-sit",
+    "stand-sit": "stand-and-sit",
+    "stand_to_sit": "stand-and-sit",
+    "stand-and-sit-assessment": "stand-and-sit",
+    "stand-and-sit-test": "stand-and-sit",
+    "stand-&-sit": "stand-and-sit",
+    "stand-&-sit-assessment": "stand-and-sit",
+    "stand-and-sit-evaluation": "stand-and-sit",
+    "finger-tapping": "finger-tapping",
+    "finger_tapping": "finger-tapping",
+    "finger-taping": "finger-tapping",
+    "finger-tapping-test": "finger-tapping",
+    "finger-tapping-assessment": "finger-tapping",
+    "finger-tap": "finger-tapping",
+    "fist-open-close": "fist-open-close",
+    "fist_open_close": "fist-open-close",
+    "fist-open-close-test": "fist-open-close",
+    "fist-open-close-assessment": "fist-open-close",
+    "palm-open": "fist-open-close",
+    "palm_open": "fist-open-close",
+}
+
+
+def _normalize_test_name(value: Optional[str]) -> str:
+    normalized = (value or "").strip().lower()
+    if not normalized:
+        return "unknown"
+    normalized = normalized.replace(" ", "-").replace("_", "-").replace("&", "and")
+    while "--" in normalized:
+        normalized = normalized.replace("--", "-")
+    return _TEST_NAME_ALIASES.get(normalized, normalized)
 
 
 def normalize_severity(value: str) -> str:
@@ -35,651 +213,301 @@ def normalize_severity(value: str) -> str:
 
     return legacy_map.get(normalized, "Stage 1")
 
-TEST_HISTORY_FILE = os.path.join(os.path.dirname(__file__), 'test_history.json')
+def _patient_to_api_dict(session: Session, p: Patient) -> PatientResponse:
+    prepo = PatientRepository(session)
+    labs = sorted(
+        prepo.list_lab_results(p.patient_id),
+        key=lambda r: (r.result_date or date.min, r.lab_id),
+    )
+    notes = sorted(
+        prepo.list_doctor_notes(p.patient_id),
+        key=lambda n: (n.note_date or date.min, n.note_id),
+    )
 
-class Patient:
-    def __init__(self,
-                 name: str,
-                 birthDate: str,
-                 height: float,
-                 weight: float,
-                 lab_results: Dict = None,
-                 doctors_notes: str = "",
-                 severity: str = "low",
-                 patient_id: str = None,
-                 lab_results_history: List = None,
-                 doctors_notes_history: List = None):
-        self.name = name
-        self.birthDate = birthDate
-        self.height = height  # in cm
-        self.weight = weight  # in kg
-        self.lab_results = lab_results or {}
-        self.doctors_notes = doctors_notes
-        self.severity = normalize_severity(severity)
-        self.patient_id = patient_id or self._generate_id()
-        self.lab_results_history = lab_results_history or []
-        self.doctors_notes_history = doctors_notes_history or []
+    latest_lr = LabResultOut.model_validate(labs[-1]) if labs else None
+    latest_dn = DoctorNoteOut.model_validate(notes[-1]) if notes else None
 
-    def _generate_id(self) -> str:
-        """Generate a unique ID for the patient based on name and current timestamp"""
-        name_part = self.name.lower().replace(" ", "")[:5]
-        time_part = str(int(datetime.now().timestamp()))
-        return f"{name_part}{time_part}"
+    return PatientResponse(
+        patient_id=p.patient_id,
+        recordNumber=p.record_number or "",
+        name=p.name or "",
+        birthDate=p.dob,  # or adjust type to date if you prefer
+        height=str(p.height or 0),
+        weight=str(p.weight or 0),
+        severity=p.severity or "",
+        latest_lab_result=latest_lr,
+        latest_doctor_note=latest_dn,
+        lab_results_history=[LabResultOut.model_validate(x) for x in labs],
+        doctors_notes_history=[DoctorNoteOut.model_validate(x) for x in notes],
+    )
 
-    def to_dict(self) -> Dict:
-        """Convert patient object to dictionary for JSON serialization"""
+
+def create_patient(
+    name: str,
+    age: int,
+    birthDate: Union[str, date],
+    height: Optional[float],
+    weight: Optional[float],
+    lab_results_history: Optional[List[LabResultOut]] = None,
+    doctors_notes_history: Optional[List[DoctorNoteOut]] = None,
+    severity: str = "",
+) -> Dict[str, Any]:
+    errs = _validate({
+        "birthDate": birthDate,
+        "height": height,
+        "weight": weight,
+        "severity": severity,
+    })
+    if errs:
+        return {"success": False, "errors": errs}
+
+    try:
+        dob = birthDate if isinstance(birthDate, date) else date.fromisoformat(str(birthDate))
+    except Exception:
+        return {"success": False, "error": "Invalid birthDate; expected YYYY-MM-DD"}
+
+    h = _parse_number(height, 0, 300)
+    w = _parse_number(weight, 0, 500)
+
+    # coerce lab_results to a plain string value
+    patient_id = _gen_patient_id(name)
+
+    try:
+        with SessionLocal() as session:
+            prepo = PatientRepository(session)
+            record_number = _next_record_number(session)
+
+            dbp = Patient(
+                patient_id=patient_id,
+                record_number=record_number,
+                user_id=123,
+                name=name,
+                dob=dob,
+                height=int(h) if h is not None else None,
+                weight=int(w) if w is not None else None,
+                severity=severity,
+            )
+            prepo.add(dbp)
+
+            for lr in lab_results_history or []:
+                prepo.add_lab_result(
+                    lab_id=lr.id,
+                    patient_id=patient_id,
+                    result_date=lr.date or datetime.now(),
+                    results=lr.results or "",
+                    added_by=lr.added_by or "system"   
+                )
+
+            # persist all doctor notes in history (if any)
+            for dn in doctors_notes_history or []:
+                prepo.add_doctor_note(
+                    note_id=dn.id,
+                    patient_id=patient_id,
+                    note_date=dn.date or datetime.now(),
+                    note=dn.note or "",
+                    added_by=dn.added_by or "system",
+                )
+
+            return {"success": True, "patient_id": patient_id}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def get_patient_info(patient_id: str) -> Dict[str, Any]:
+    with SessionLocal() as session:
+        prepo = PatientRepository(session)
+        dbp = prepo.get(patient_id)
+        if not dbp:
+            return {"success": False, "error": "Patient not found"}
+        return {"success": True, "patient": _patient_to_api_dict(session, dbp)}
+
+def get_all_patients_info(skip: int = 0, limit: int = 100) -> Dict[str, Any]:
+    with SessionLocal() as session:
+        prepo = PatientRepository(session)
+        rows = prepo.list(skip=skip, limit=limit)
+        total = prepo.count()
         return {
-            "patient_id": self.patient_id,
-            "name": self.name,
-            "birthDate": self.birthDate,
-            "height": str(self.height),  # Convert to string for API response
-            "weight": str(self.weight),  # Convert to string for API response
-            "lab_results": self.lab_results,
-            "doctors_notes": self.doctors_notes,
-            "severity": self.severity,
-            "lab_results_history": self.lab_results_history,
-            "doctors_notes_history": self.doctors_notes_history
+            "success": True,
+            "patients": [_patient_to_api_dict(session, r) for r in rows],
+            "total": total,
+            "skip": skip,
+            "limit": limit,
         }
+    
 
-    @classmethod
-    def from_dict(cls, data: Dict) -> 'Patient':
-        """Create a Patient object from dictionary data"""
-        # Handle height conversion from string to float
-        height_raw = data.get("height", 0.0)
-        if isinstance(height_raw, str):
-            # Try to extract numeric value from strings like "5'8"" or "170 cm"
-            try:
-                # Remove common units and extract numbers
-                height_str = str(height_raw).replace("'", "").replace('"', "").replace("cm", "").replace("lbs", "").strip()
-                height = float(height_str) if height_str else 0.0
-            except ValueError:
-                height = 0.0
-        else:
-            height = float(height_raw) if height_raw is not None else 0.0
-        
-        # Handle weight conversion from string to float
-        weight_raw = data.get("weight", 0.0)
-        if isinstance(weight_raw, str):
-            # Try to extract numeric value from strings like "145 lbs" or "70 kg"
-            try:
-                # Remove common units and extract numbers
-                weight_str = str(weight_raw).replace("lbs", "").replace("kg", "").strip()
-                weight = float(weight_str) if weight_str else 0.0
-            except ValueError:
-                weight = 0.0
-        else:
-            weight = float(weight_raw) if weight_raw is not None else 0.0
-        
-        return cls(
-            patient_id=data.get("patient_id"),
-            name=data.get("name", ""),
-            birthDate=data.get("birthDate", ""),
-            height=height,
-            weight=weight,
-            lab_results=data.get("lab_results", {}),
-            doctors_notes=data.get("doctors_notes", ""),
-            severity=normalize_severity(data.get("severity", "Stage 1")),
-            lab_results_history=data.get("lab_results_history", []),
-            doctors_notes_history=data.get("doctors_notes_history", [])
-        )
+def _extract_lab_result_value(v: Any) -> Optional[str]:
+    """Return only the textual value to persist into Visit.lab_result (Text)."""
+    if v is None:
+        return None
+    if isinstance(v, dict):
+        # Keep only the 'value' field if provided, otherwise stringify the dict
+        return v.get("value", str(v))
+    if isinstance(v, str):
+        return v
+    return str(v)
 
+def update_patient_info(patient_id: str, updated_data: PatientUpdate) -> Dict[str, Any]:
+    # Turn model into a partial dict
+    data = updated_data.model_dump(exclude_unset=True)
 
-#Refacto to sqlite
-class PatientManager:
-    # Class lock for async operations
-    _lock = asyncio.Lock()
+    errs = _validate(data)  # or skip this if _validate expects full objects only
+    if errs:
+        return {"success": False, "errors": errs}
 
-    def __init__(self, file_path: str = "patients.json", verbose: bool = False):
-        self.file_path = file_path
-        self.patients: Dict[str, Patient] = {}
-        self.verbose = verbose
-        self._load_patients()
+    with SessionLocal() as session:
+        prepo = PatientRepository(session)
 
-    def _log(self, message: str) -> None:
-        """Log a message if verbose mode is enabled"""
-        if self.verbose:
-            print(message)
-
-    def _load_patients(self) -> None:
-        """Load patients from the JSON file if it exists"""
-        if os.path.exists(self.file_path):
-            try:
-                with open(self.file_path, 'r') as f:
-                    patients_data = json.load(f)
-
-                for patient_id, patient_data in patients_data.items():
-                    self.patients[patient_id] = Patient.from_dict(patient_data)
-
-                self._log(f"Loaded {len(self.patients)} patients from {self.file_path}")
-            except Exception as e:
-                self._log(f"Error loading patients: {str(e)}")
-        else:
-            self._log(f"No patients file found at {self.file_path}. Starting with empty database.")
-
-    def _backup_patients(self) -> bool:
-        """Create a backup of the patients file before making changes"""
-        if os.path.exists(self.file_path):
-            backup_path = f"{self.file_path}.backup"
-            try:
-                with open(self.file_path, 'r') as src:
-                    with open(backup_path, 'w') as dst:
-                        dst.write(src.read())
-                return True
-            except Exception as e:
-                self._log(f"Error creating backup: {str(e)}")
-        return False
-
-    def _restore_backup(self) -> bool:
-        """Restore the patients file from backup if an operation fails"""
-        backup_path = f"{self.file_path}.backup"
-        if os.path.exists(backup_path):
-            try:
-                with open(backup_path, 'r') as src:
-                    with open(self.file_path, 'w') as dst:
-                        dst.write(src.read())
-                return True
-            except Exception as e:
-                self._log(f"Error restoring backup: {str(e)}")
-        return False
-
-    def save_patients(self) -> bool:
-        """Save all patients to the JSON file with backup support"""
-        self._backup_patients()
-        patients_data = {patient_id: patient.to_dict()
-                         for patient_id, patient in self.patients.items()}
-
-        try:
-            with open(self.file_path, 'w') as f:
-                json.dump(patients_data, f, indent=2)
-            self._log(f"Saved {len(self.patients)} patients to {self.file_path}")
-            return True
-        except Exception as e:
-            self._log(f"Error saving patients: {str(e)}")
-            self._restore_backup()
-            return False
-
-    def validate_patient_data(self, data: Dict) -> Dict:
-        """Validate patient data and return any errors"""
-        errors = {}
-
-        if "name" in data and not isinstance(data["name"], str):
-            errors["name"] = "Name must be a string"
-
-        if "age" in data:
-            if not isinstance(data["age"], int):
-                errors["age"] = "Age must be an integer"
-            elif data["age"] < 0 or data["age"] > 120:
-                errors["age"] = "Age must be between 0 and 120"
-
-        if "height" in data:
-            # Handle both string and numeric inputs
-            height_value = data["height"]
-            if isinstance(height_value, str):
-                # Try to convert string to float
-                try:
-                    # Extract numeric part from string (e.g., "170.0 cm" -> 170.0)
-                    import re
-                    numeric_match = re.search(r'(\d+\.?\d*)', height_value)
-                    if numeric_match:
-                        height_value = float(numeric_match.group(1))
-                    else:
-                        errors["height"] = "Height must contain a valid number"
-                        height_value = None
-                except ValueError:
-                    errors["height"] = "Height must be a valid number"
-                    height_value = None
-            elif not isinstance(height_value, (int, float)):
-                errors["height"] = "Height must be a number"
-                height_value = None
-            
-            if height_value is not None and (height_value < 0 or height_value > 300):
-                errors["height"] = "Height must be between 0 and 300 cm"
-
-        if "weight" in data:
-            # Handle both string and numeric inputs
-            weight_value = data["weight"]
-            if isinstance(weight_value, str):
-                # Try to convert string to float
-                try:
-                    # Extract numeric part from string (e.g., "70.0 kg" -> 70.0)
-                    import re
-                    numeric_match = re.search(r'(\d+\.?\d*)', weight_value)
-                    if numeric_match:
-                        weight_value = float(numeric_match.group(1))
-                    else:
-                        errors["weight"] = "Weight must contain a valid number"
-                        weight_value = None
-                except ValueError:
-                    errors["weight"] = "Weight must be a valid number"
-                    weight_value = None
-            elif not isinstance(weight_value, (int, float)):
-                errors["weight"] = "Weight must be a number"
-                weight_value = None
-            
-            if weight_value is not None and (weight_value < 0 or weight_value > 500):
-                errors["weight"] = "Weight must be between 0 and 500 kg"
-
-        if "severity" in data:
-            severity_norm = (str(data["severity"]) or "").strip().lower()
-            allowed = {"low", "medium", "high", "mild", "moderate", "severe",
-                       "stage 1", "stage 2", "stage 3", "stage 4", "stage 5"}
-            if severity_norm not in allowed:
-                errors["severity"] = "Severity must be one of: Stage 1-5 (or legacy mild/moderate/severe)"
-            elif "severity" not in errors:
-                data["severity"] = normalize_severity(data["severity"])
-
-        return errors
-
-    def add_patient(self, patient: Patient) -> Dict:
-        """Add a new patient or update an existing one"""
-        try:
-            self.patients[patient.patient_id] = patient
-            success = self.save_patients()
-            if success:
-                return {"success": True, "patient_id": patient.patient_id}
-            else:
-                return {"success": False, "error": "Failed to save patient data"}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-
-    def get_patient(self, patient_id: str) -> Optional[Patient]:
-        """Get a patient by ID"""
-        return self.patients.get(patient_id)
-
-    def get_all_patients(self, skip: int = 0, limit: int = 100) -> List[Patient]:
-        """
-        Get all patients with pagination support
-
-        Args:
-            skip: Number of patients to skip
-            limit: Maximum number of patients to return
-
-        Returns:
-            List of Patient objects
-        """
-        all_patients = list(self.patients.values())
-        return all_patients[skip:skip + limit]
-
-    def count_patients(self) -> int:
-        """Return the total number of patients"""
-        return len(self.patients)
-
-    def delete_patient(self, patient_id: str) -> Dict:
-        """Delete a patient by ID"""
-        if patient_id in self.patients:
-            try:
-                del self.patients[patient_id]
-                success = self.save_patients()
-                if success:
-                    return {"success": True}
-                else:
-                    return {"success": False, "error": "Failed to save changes"}
-            except Exception as e:
-                return {"success": False, "error": str(e)}
-        return {"success": False, "error": "Patient not found"}
-
-    def update_patient(self, patient_id: str, updated_data: Dict) -> Dict:
-        """Update a patient's information"""
-        print(f"Updating patient {patient_id} with data: {updated_data}")
-        
-        patient = self.get_patient(patient_id)
-        if not patient:
-            print(f"Patient {patient_id} not found")
+        dbp = prepo.get(patient_id)
+        if not dbp:
             return {"success": False, "error": "Patient not found"}
 
-        print(f"Found patient: {patient.name}")
-
-        # Validate the data
-        validation_errors = self.validate_patient_data(updated_data)
-        if validation_errors:
-            print(f"Validation errors: {validation_errors}")
-            return {"success": False, "errors": validation_errors}
-
-        try:
-            # Update patient fields
-            if "name" in updated_data:
-                patient.name = updated_data["name"]
-            if "age" in updated_data:
-                patient.age = updated_data["age"]
-            if "height" in updated_data:
-                # Convert string to float if needed
-                height_value = updated_data["height"]
-                if isinstance(height_value, str):
-                    import re
-                    numeric_match = re.search(r"(\d+\.?\d*)", height_value)
-                    patient.height = float(numeric_match.group(1)) if numeric_match else 0.0
-                else:
-                    patient.height = float(height_value)
-            if "weight" in updated_data:
-                # Convert string to float if needed
-                weight_value = updated_data["weight"]
-                if isinstance(weight_value, str):
-                    import re
-                    numeric_match = re.search(r"(\d+\.?\d*)", weight_value)
-                    patient.weight = float(numeric_match.group(1)) if numeric_match else 0.0
-                else:
-                    patient.weight = float(weight_value)
-            if "lab_results" in updated_data:
-                patient.lab_results = updated_data["lab_results"]
-            if "lab_results_history" in updated_data:
-                patient.lab_results_history = updated_data["lab_results_history"]
-            if "doctors_notes" in updated_data:
-                patient.doctors_notes = updated_data["doctors_notes"]
-            if "doctors_notes_history" in updated_data:
-                patient.doctors_notes_history = updated_data["doctors_notes_history"]
-            if "severity" in updated_data:
-                patient.severity = normalize_severity(updated_data["severity"])
-
-            success = self.save_patients()
-            if success:
-                return {"success": True, "patient_id": patient_id}
-            else:
-                return {"success": False, "error": "Failed to save changes"}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-
-    def search_patients(self, query: str) -> List[Patient]:
-        """
-        Search for patients by name
-
-        Args:
-            query: Search query string
-
-        Returns:
-            List of matching Patient objects
-        """
-        query = query.lower()
-        return [
-            patient for patient in self.patients.values()
-            if query in patient.name.lower()
-        ]
-
-    def filter_patients(self, criteria: Dict) -> List[Patient]:
-        """
-        Filter patients based on criteria
-
-        Args:
-            criteria: Dictionary with filter criteria
-
-        Returns:
-            List of matching Patient objects
-        """
-        filtered_patients = list(self.patients.values())
-
-        if "min_age" in criteria:
-            filtered_patients = [p for p in filtered_patients if p.age >= criteria["min_age"]]
-
-        if "max_age" in criteria:
-            filtered_patients = [p for p in filtered_patients if p.age <= criteria["max_age"]]
-
-        if "severity" in criteria:
-            desired = normalize_severity(criteria["severity"])
-            filtered_patients = [p for p in filtered_patients if p.severity == desired]
-
-        return filtered_patients
-
-    def add_patients_bulk(self, patients: List[Patient]) -> Dict:
-        """
-        Add multiple patients at once
-
-        Args:
-            patients: List of Patient objects to add
-
-        Returns:
-            Dictionary with success status and added patient IDs
-        """
-        try:
-            added_ids = []
-            for patient in patients:
-                self.patients[patient.patient_id] = patient
-                added_ids.append(patient.patient_id)
-
-            success = self.save_patients()
-            if success:
-                return {"success": True, "patient_ids": added_ids}
-            else:
-                return {"success": False, "error": "Failed to save patients"}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-
-    def export_patients_csv(self, file_path: str) -> bool:
-        """
-        Export all patients to a CSV file
-
-        Args:
-            file_path: Path to save the CSV file
-
-        Returns:
-            True if successful, False otherwise
-        """
-        try:
-            import csv
-
-            # Get all patient data
-            patients = list(self.patients.values())
-
-            # Define CSV fields
-            fields = ["patient_id", "name", "age", "height", "weight",
-                      "doctors_notes", "severity"]
-
-            # Write to CSV
-            with open(file_path, 'w', newline='') as f:
-                writer = csv.DictWriter(f, fieldnames=fields)
-                writer.writeheader()
-
-                for patient in patients:
-                    data = patient.to_dict()
-                    # Remove lab_results as it's a complex type
-                    if "lab_results" in data:
-                        del data["lab_results"]
-                    writer.writerow(data)
-
-            return True
-        except Exception as e:
-            self._log(f"Error exporting to CSV: {str(e)}")
-            return False
-
-    # Async methods for FastAPI
-    async def async_add_patient(self, patient: Patient) -> Dict:
-        """Add a patient with concurrency protection"""
-        async with self._lock:
-            return self.add_patient(patient)
-
-    async def async_get_patient(self, patient_id: str) -> Optional[Patient]:
-        """Get a patient with concurrency protection"""
-        async with self._lock:
-            return self.get_patient(patient_id)
-
-    async def async_update_patient(self, patient_id: str, updated_data: Dict) -> Dict:
-        """Update a patient with concurrency protection"""
-        async with self._lock:
-            return self.update_patient(patient_id, updated_data)
-
-    async def async_delete_patient(self, patient_id: str) -> Dict:
-        """Delete a patient with concurrency protection"""
-        async with self._lock:
-            return self.delete_patient(patient_id)
-
-    async def async_get_all_patients(self, skip: int = 0, limit: int = 100) -> List[Patient]:
-        """Get all patients with concurrency protection"""
-        async with self._lock:
-            return self.get_all_patients(skip, limit)
-
-    async def async_search_patients(self, query: str) -> List[Patient]:
-        """Search patients with concurrency protection"""
-        async with self._lock:
-            return self.search_patients(query)
-
-    async def async_filter_patients(self, criteria: Dict) -> List[Patient]:
-        """Filter patients with concurrency protection"""
-        async with self._lock:
-            return self.filter_patients(criteria)
-
-    async def async_count_patients(self) -> int:
-        """Count patients with concurrency protection"""
-        async with self._lock:
-            return self.count_patients()
-
-
-# Utility functions for API integration
-def create_patient(name: str, birthDate: str, height: float, weight: float,
-                   lab_results: Dict = None, doctors_notes: str = "", severity: str = "low") -> Dict:
-    """Create a new patient and return their data"""
-    manager = PatientManager()
-
-    patient = Patient(
-        name=name,
-        birthDate=birthDate,
-        height=height,
-        weight=weight,
-        lab_results=lab_results or {},
-        doctors_notes=doctors_notes,
-        severity=severity
-    )
-
-    return manager.add_patient(patient)
-
-
-def get_patient_info(patient_id: str) -> Dict:
-    """Get a patient's information"""
-    manager = PatientManager()
-    patient = manager.get_patient(patient_id)
-
-    if patient:
-        return {"success": True, "patient": patient.to_dict()}
-    return {"success": False, "error": "Patient not found"}
-
-
-def get_all_patients_info(skip: int = 0, limit: int = 100) -> Dict:
-    """Get information for all patients with pagination"""
-    manager = PatientManager()
-    patients = manager.get_all_patients(skip, limit)
-    total = manager.count_patients()
-
-    return {
-        "success": True,
-        "patients": [patient.to_dict() for patient in patients],
-        "total": total,
-        "skip": skip,
-        "limit": limit
-    }
-
-
-def update_patient_info(patient_id: str, updated_data: Dict) -> Dict:
-    """Update a patient's information"""
-    manager = PatientManager()
-    return manager.update_patient(patient_id, updated_data)
-
-
-def delete_patient_record(patient_id: str) -> Dict:
-    """Delete a patient's record"""
-    manager = PatientManager()
-    return manager.delete_patient(patient_id)
-
-
-def search_patients(query: str) -> Dict:
-    """Search for patients by name"""
-    manager = PatientManager()
-    patients = manager.search_patients(query)
-
-    return {
-        "success": True,
-        "patients": [patient.to_dict() for patient in patients],
-        "count": len(patients)
-    }
-
-
-def filter_patients(criteria: Dict) -> Dict:
-    """Filter patients based on criteria"""
-    manager = PatientManager()
-    patients = manager.filter_patients(criteria)
-
-    return {
-        "success": True,
-        "patients": [patient.to_dict() for patient in patients],
-        "count": len(patients)
-    }
-
-
-# Async utility functions for FastAPI
-async def async_create_patient(name: str, birthDate: str, height: float, weight: float,
-                               lab_results: Dict = None, doctors_notes: str = "", severity: str = "low") -> Dict:
-    """Create a new patient asynchronously"""
-    manager = PatientManager()
-
-    patient = Patient(
-        name=name,
-        birthDate=birthDate,
-        height=height,
-        weight=weight,
-        lab_results=lab_results or {},
-        doctors_notes=doctors_notes,
-        severity=severity
-    )
-
-    return await manager.async_add_patient(patient)
-
-
-async def async_get_patient_info(patient_id: str) -> Dict:
-    """Get a patient's information asynchronously"""
-    manager = PatientManager()
-    patient = await manager.async_get_patient(patient_id)
-
-    if patient:
-        return {"success": True, "patient": patient.to_dict()}
-    return {"success": False, "error": "Patient not found"}
-
-
-async def async_get_all_patients_info(skip: int = 0, limit: int = 100) -> Dict:
-    """Get information for all patients with pagination asynchronously"""
-    manager = PatientManager()
-    patients = await manager.async_get_all_patients(skip, limit)
-    total = await manager.async_count_patients()
-
-    return {
-        "success": True,
-        "patients": [patient.to_dict() for patient in patients],
-        "total": total,
-        "skip": skip,
-        "limit": limit
-    }
-
-
-async def async_update_patient_info(patient_id: str, updated_data: Dict) -> Dict:
-    """Update a patient's information asynchronously"""
-    manager = PatientManager()
-    return await manager.async_update_patient(patient_id, updated_data)
-
-
-async def async_delete_patient_record(patient_id: str) -> Dict:
-    """Delete a patient's record asynchronously"""
-    manager = PatientManager()
-    return await manager.async_delete_patient(patient_id)
-
-
-async def async_search_patients(query: str) -> Dict:
-    """Search for patients by name asynchronously"""
-    manager = PatientManager()
-    patients = await manager.async_search_patients(query)
-
-    return {
-        "success": True,
-        "patients": [patient.to_dict() for patient in patients],
-        "count": len(patients)
-    }
-
-
-async def async_filter_patients(criteria: Dict) -> Dict:
-    """Filter patients based on criteria asynchronously"""
-    manager = PatientManager()
-    patients = await manager.async_filter_patients(criteria)
-
-    return {
-        "success": True,
-        "patients": [patient.to_dict() for patient in patients],
-        "count": len(patients)
-    }
+        # --- Patch basic Patient columns ---
+        if "name" in data:
+            dbp.name = data["name"]
+
+        if "birthDate" in data:
+            dbp.dob = data["birthDate"]
+
+        if "height" in data:
+            h = _parse_number(data["height"], 0, 300)
+            dbp.height = int(h) if h is not None else None
+
+        if "weight" in data:
+            w = _parse_number(data["weight"], 0, 500)
+            dbp.weight = int(w) if w is not None else None
+
+        if "severity" in data:
+            dbp.severity = data["severity"]
+
+        session.commit()
+        return {"success": True, "patient_id": patient_id}
+
+
+def add_patient_lab_result(patient_id: str, lab_result: LabResultIn) -> Dict[str, Any]:
+    with SessionLocal() as session:
+        prepo = PatientRepository(session)
+        dbp = prepo.get(patient_id)
+        if not dbp:
+            return {"success": False, "error": "Patient not found"}
+
+        prepo.add_lab_result(
+            lab_id=lab_result.id or _gen_entry_id("lab"),
+            patient_id=patient_id,
+            result_date=lab_result.date or datetime.now(),
+            results=lab_result.results or "",
+            added_by=lab_result.added_by or "system",
+        )
+        return {"success": True, "patient_id": patient_id}
+
+
+def add_patient_doctor_note(patient_id: str, doctor_note: DoctorNoteIn) -> Dict[str, Any]:
+    with SessionLocal() as session:
+        prepo = PatientRepository(session)
+        dbp = prepo.get(patient_id)
+        if not dbp:
+            return {"success": False, "error": "Patient not found"}
+
+        prepo.add_doctor_note(
+            note_id=doctor_note.id or _gen_entry_id("note"),
+            patient_id=patient_id,
+            note_date=doctor_note.date or datetime.now(),
+            note=doctor_note.note or "",
+            added_by=doctor_note.added_by or "system",
+        )
+        return {"success": True, "patient_id": patient_id}
+
+def delete_patient_record(patient_id: str) -> Dict[str, Any]:
+    with SessionLocal() as session:
+        prepo = PatientRepository(session)
+        ok = prepo.delete(patient_id)
+        return {"success": ok} if ok else {"success": False, "error": "Patient not found"}
+
+def search_patients(query: str) -> Dict[str, Any]:
+    with SessionLocal() as session:
+        prepo = PatientRepository(session)
+        if hasattr(prepo, "search_by_name"):
+            rows = prepo.search_by_name(query)
+        else:
+            rows = prepo.list()
+            q = query.lower()
+            rows = [
+                p for p in rows
+                if q in (p.name or "").lower() or q in (p.record_number or "").lower()
+            ]
+        return {"success": True, "patients": [_patient_to_api_dict(session, r) for r in rows], "count": len(rows)}
+
+def filter_patients(criteria: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Supports: name, min_age, max_age, severity (severity via latest visit.vitals_json).
+    """
+    with SessionLocal() as session:
+        prepo = PatientRepository(session)
+
+        # If your repo exposes a richer filter, prefer it:
+        if hasattr(prepo, "filter_patients"):
+            rows = prepo.filter_patients(
+                name=criteria.get("name"),
+                min_age=criteria.get("min_age"),
+                max_age=criteria.get("max_age"),
+                severity=criteria.get("severity"),
+                skip=criteria.get("skip", 0),
+                limit=criteria.get("limit", 100),
+            )
+        else:
+            # Minimal fallback: list + name filter (age/severity omitted if repo lacks it)
+            rows = prepo.list(skip=criteria.get("skip", 0), limit=criteria.get("limit", 100))
+            if criteria.get("name"):
+                q = criteria["name"].lower()
+                rows = [p for p in rows if (p.name or "").lower().find(q) >= 0]
+
+
+
+        return {"success": True, "patients": [_patient_to_api_dict(session, r) for r in rows], "count": len(rows)}
 
+# ---------------- Async wrappers (same names) ----------------
+async def async_create_patient(*args, **kwargs) -> Dict[str, Any]:
+    async with _async_lock:
+        return create_patient(*args, **kwargs)
+
+async def async_get_patient_info(patient_id: str) -> Dict[str, Any]:
+    async with _async_lock:
+        return get_patient_info(patient_id)
+
+async def async_get_all_patients_info(skip: int = 0, limit: int = 100) -> Dict[str, Any]:
+    async with _async_lock:
+        return get_all_patients_info(skip=skip, limit=limit)
+
+async def async_update_patient_info(patient_id: str, updated_data: PatientUpdate) -> Dict[str, Any]:
+    async with _async_lock:
+        return update_patient_info(patient_id, updated_data)
+
+
+async def async_add_patient_lab_result(patient_id: str, lab_result: LabResultIn) -> Dict[str, Any]:
+    async with _async_lock:
+        return add_patient_lab_result(patient_id, lab_result)
+
+
+async def async_add_patient_doctor_note(patient_id: str, doctor_note: DoctorNoteIn) -> Dict[str, Any]:
+    async with _async_lock:
+        return add_patient_doctor_note(patient_id, doctor_note)
+
+async def async_delete_patient_record(patient_id: str) -> Dict[str, Any]:
+    async with _async_lock:
+        return delete_patient_record(patient_id)
+
+async def async_search_patients(query: str) -> Dict[str, Any]:
+    async with _async_lock:
+        return search_patients(query)
+
+async def async_filter_patients(criteria: Dict[str, Any]) -> Dict[str, Any]:
+    async with _async_lock:
+        return filter_patients(criteria)
+
+
+# =========================
+# TestHistoryManager refactor -> SQL TestResultRepository
+# =========================
+TEST_HISTORY_FILE = str(TEST_HISTORY_PATH)
 
 class TestHistoryManager:
     _lock = threading.Lock()

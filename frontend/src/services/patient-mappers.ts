@@ -1,0 +1,524 @@
+import { AVAILABLE_TESTS, Patient, Test, TestIndicator, LabResultEntry, DoctorNoteEntry } from '@/types/patient';
+
+type TestType = Test['type'];
+type TestStatus = Test['status'];
+
+const TEST_METADATA: Record<TestType, { name: string; description: string }> = AVAILABLE_TESTS.reduce(
+  (acc, test) => {
+    acc[test.id] = { name: test.name, description: test.description };
+    return acc;
+  },
+  {
+    'stand-and-sit': { name: 'Stand and Sit Test', description: 'Measures sit-to-stand motor function' },
+    'finger-tapping': { name: 'Finger Tapping Test', description: 'Measures rapid finger dexterity' },
+    'fist-open-close': { name: 'Fist Open and Close Test', description: 'Assesses hand opening and closing cycles' },
+    unknown: { name: 'Unsupported Test', description: 'Backend returned an unsupported test type.' },
+  } as Record<TestType, { name: string; description: string }>,
+);
+
+const STATUS_INDICATORS: Record<TestStatus, TestIndicator> = {
+  completed: {
+    color: 'success',
+    label: 'Completed',
+    description: 'Recording captured successfully.',
+  },
+  'in-progress': {
+    color: 'warning',
+    label: 'In Progress',
+    description: 'Recording underway. Metrics may still be processing.',
+  },
+  pending: {
+    color: 'muted',
+    label: 'Pending',
+    description: 'Test scheduled but no recording available yet.',
+  },
+};
+
+const KNOWN_TEST_TYPES: readonly TestType[] = ['stand-and-sit', 'finger-tapping', 'fist-open-close'] as const;
+
+export function normalizeBirthDate(value: string): string {
+  if (!value) return '';
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+
+  const isoMatch = trimmed.match(/^(\d{4})[/-](\d{2})[/-](\d{2})$/);
+  if (isoMatch) {
+    return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
+  }
+
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) return '';
+
+  const year = parsed.getUTCFullYear();
+  const month = String(parsed.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(parsed.getUTCDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+const calculateAge = (birthDate: string): number => {
+  const normalized = normalizeBirthDate(birthDate);
+  if (!normalized) return 0;
+
+  const [yearStr, monthStr, dayStr] = normalized.split('-');
+  const year = Number(yearStr);
+  const month = Number(monthStr);
+  const day = Number(dayStr);
+
+  if (!year || !month || !day) return 0;
+
+  const today = new Date();
+  let age = today.getFullYear() - year;
+  const monthDiff = today.getMonth() + 1 - month;
+
+  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < day)) {
+    age--;
+  }
+
+  return Math.max(0, age);
+};
+
+const toIsoStamp = (value?: string | null): string => {
+  if (!value) return 'unknown-date';
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? 'unknown-date' : parsed.toISOString();
+};
+
+const slug = (value?: string | null): string => {
+  const normalized = (value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return normalized || 'empty';
+};
+
+const buildStableEntryId = (
+  kind: 'lab' | 'note',
+  patientId: string,
+  dateValue: string | undefined,
+  contentValue: string | undefined,
+  addedBy?: string,
+): string => {
+  return `${kind}_${slug(patientId)}_${slug(toIsoStamp(dateValue))}_${slug(contentValue).slice(0, 24)}_${slug(addedBy).slice(0, 16)}`;
+};
+
+export interface BackendLabResultEntry {
+  id?: string;
+  date: string;
+  results: string;
+  added_by?: string;
+}
+
+export interface BackendDoctorNoteEntry {
+  id?: string;
+  date: string;
+  note: string;
+  added_by?: string;
+}
+
+export interface BackendPatient {
+  patient_id: string;
+  recordNumber?: string;
+  name: string;
+  birthDate: string;
+  age?: number;
+  height?: number | string | null;
+  weight?: number | string | null;
+  severity: string;
+  lab_results_history?: BackendLabResultEntry[];
+  doctors_notes_history?: BackendDoctorNoteEntry[];
+  latest_lab_result?: BackendLabResultEntry | null;
+  latest_doctor_note?: BackendDoctorNoteEntry | null;
+}
+
+type IndicatorColor = TestIndicator['color'];
+
+interface BackendTestIndicator {
+  color?: string | null;
+  label?: string | null;
+  description?: string | null;
+}
+
+interface BackendDtwMetrics {
+  distance?: number | string | null;
+  avg_step_cost?: number | string | null;
+  similarity?: number | string | null;
+  session_id?: string | null;
+  artifacts_dir?: string | null;
+  artifacts?: { dir?: string | null } | null;
+}
+
+export interface BackendTestEntry {
+  id?: string | null;
+  test_id?: string | null;
+  test_name?: string | null;
+  display_name?: string | null;
+  name?: string | null;
+  date?: string | null;
+  status?: string | null;
+  recording_file?: string | null;
+  recording_url?: string | null;
+  summary_available?: boolean | null;
+  frame_count?: number | string | null;
+  fps?: number | string | null;
+  dtw?: BackendDtwMetrics | null;
+  indicator?: BackendTestIndicator | null;
+  patient_id?: string | null;
+  model?: string | null;
+}
+
+export interface BackendPatientCreate {
+  name: string;
+  age: number;
+  birthDate: string;
+  height: string;
+  weight: string;
+  severity: string;
+  lab_results_history?: BackendLabResultEntry[];
+  doctors_notes_history?: BackendDoctorNoteEntry[];
+}
+
+export interface BackendPatientUpdate {
+  name?: string;
+  birthDate?: string;
+  height?: string;
+  weight?: string;
+  severity?: string;
+}
+
+export interface BackendPatientMutationResult {
+  success: boolean;
+  patient_id: string;
+}
+
+export interface HealthStatus {
+  status?: string;
+  [key: string]: unknown;
+}
+
+export interface UploadVideoResponse {
+  filename?: string;
+  disk_path?: string;
+  [key: string]: unknown;
+}
+
+export interface LoginResponse {
+  access_token: string;
+  token_type: string;
+}
+
+export interface BackendSeverityPrediction {
+  predicted_updrs_stage: number;
+  probabilities: Record<string, number>;
+  severity: string;
+  severity_stage: number;
+  prediction: string;
+  confidence: number;
+  lstm_output: number[];
+  logits: number[];
+  n_windows: number;
+  window_size: number;
+  stride: number;
+  model_version: string;
+  preprocessing_version: string;
+  checkpoint_path: string;
+  attention_weights?: number[] | null;
+  patient_id: string;
+  patient_updated: boolean;
+}
+
+export interface PatientFormInput {
+  firstName: string;
+  lastName: string;
+  recordNumber?: string;
+  birthDate: string;
+  height: string;
+  weight: string;
+  labResults: string;
+  doctorNotes: string;
+  severity: Patient['severity'];
+  createdAt?: Date;
+  updatedAt?: Date;
+}
+
+export type PatientUpdateInput = Partial<Pick<Patient, 'firstName' | 'lastName' | 'birthDate' | 'height' | 'weight' | 'severity'>>;
+
+export type AuthTokenPayload = {
+  accessToken: string;
+  tokenType: string;
+};
+
+const normalizeTestKey = (value?: string | null): string => {
+  if (!value) return '';
+  return value.trim().toLowerCase().replace(/[_\s]+/g, '-');
+};
+
+const resolveTestType = (value?: string | null): TestType => {
+  const normalized = normalizeTestKey(value);
+  if ((KNOWN_TEST_TYPES as readonly string[]).includes(normalized as TestType)) {
+    return normalized as TestType;
+  }
+  if (normalized === 'finger-taping') {
+    return 'finger-tapping';
+  }
+  return 'unknown';
+};
+
+const resolveTestStatus = (value?: string | null, hasRecording: boolean = false): TestStatus => {
+  const normalized = (value || '').trim().toLowerCase();
+  if (normalized === 'completed' || normalized === 'in-progress' || normalized === 'pending') {
+    return normalized as TestStatus;
+  }
+  return hasRecording ? 'completed' : 'pending';
+};
+
+const toDate = (value?: string | null): Date => {
+  if (!value) return new Date();
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+};
+
+const isIndicatorColor = (value: string): value is IndicatorColor => {
+  return ['success', 'warning', 'destructive', 'muted'].includes(value);
+};
+
+const normalizeIndicator = (status: TestStatus, indicator?: BackendTestIndicator | null): TestIndicator => {
+  const base = { ...STATUS_INDICATORS[status] };
+  if (!indicator) return base;
+  if (indicator.color && typeof indicator.color === 'string' && isIndicatorColor(indicator.color)) base.color = indicator.color;
+  if (indicator.label && typeof indicator.label === 'string') base.label = indicator.label;
+  if (indicator.description && typeof indicator.description === 'string') base.description = indicator.description;
+  return base;
+};
+
+const resolveRecordingPaths = (recordingUrl?: string | null, recordingFile?: string | null, apiBaseUrl: string = '/api') => {
+  let absolute: string | undefined;
+  let relative: string | undefined;
+
+  if (recordingUrl) {
+    if (recordingUrl.startsWith('http://') || recordingUrl.startsWith('https://')) {
+      absolute = recordingUrl;
+    } else {
+      relative = recordingUrl.startsWith('/') ? recordingUrl : `/${recordingUrl}`;
+      absolute = `${apiBaseUrl}${relative}`;
+    }
+  } else if (recordingFile) {
+    const sanitized = recordingFile.replace(/^\/+/, '');
+    relative = `/recordings/${sanitized}`;
+    absolute = `${apiBaseUrl}${relative}`;
+  }
+
+  return { relative, absolute };
+};
+
+const parseNumber = (value: number | string | null | undefined): number | null => {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+export const convertBackendTestToFrontend = (patientId: string, entry: BackendTestEntry, apiBaseUrl: string = '/api'): Test => {
+  const testType = resolveTestType(entry.test_name || entry.name || entry.display_name);
+  if (testType === 'unknown') {
+    console.warn('Unsupported backend test type received', {
+      patientId,
+      rawType: entry.test_name || entry.name || entry.display_name || null,
+      entry,
+    });
+  }
+  const metadata = TEST_METADATA[testType];
+  const recordingPaths = resolveRecordingPaths(entry.recording_url, entry.recording_file, apiBaseUrl);
+  const hasRecording = Boolean(recordingPaths.absolute);
+  const status = resolveTestStatus(entry.status, hasRecording);
+  const indicator = normalizeIndicator(status, entry.indicator);
+  const testDate = toDate(entry.date);
+
+  const dtwMetrics = entry.dtw || null;
+  const similarity = dtwMetrics ? parseNumber(dtwMetrics.similarity) : null;
+  const distance = dtwMetrics ? parseNumber(dtwMetrics.distance) : null;
+  const rawId = entry.test_id || entry.id || entry.recording_file || `${testType}-${testDate.getTime()}`;
+  const sanitizedId = String(rawId).replace(/\s+/g, '-');
+
+  return {
+    id: sanitizedId,
+    patientId,
+    name: entry.display_name || entry.name || metadata?.name || 'Motor Test',
+    type: testType,
+    date: testDate,
+    status,
+    videoUrl: recordingPaths.absolute,
+    recordingUrl: recordingPaths.absolute ?? recordingPaths.relative,
+    recordingFile: entry.recording_file || undefined,
+    summaryAvailable: entry.summary_available ?? hasRecording,
+    frameCount: parseNumber(entry.frame_count),
+    fps: parseNumber(entry.fps),
+    similarity,
+    distance,
+    dtwSessionId: dtwMetrics && typeof dtwMetrics.session_id === 'string' ? dtwMetrics.session_id : null,
+    indicator,
+    results: undefined,
+  };
+};
+
+export const convertBackendToFrontend = (backendPatient: BackendPatient): Patient => {
+  const name = backendPatient.name || '';
+  const nameParts = name.split(' ');
+  const firstName = nameParts[0] || '';
+  const lastName = nameParts.slice(1).join(' ') || '';
+  const normalizedBirthDate = normalizeBirthDate(backendPatient.birthDate);
+  const doctorNotesHistoryRaw = backendPatient.doctors_notes_history || [];
+  const labResultsHistoryRaw = backendPatient.lab_results_history || [];
+
+  const doctorNotesHistory = doctorNotesHistoryRaw.map(entry => ({
+    id: entry.id || buildStableEntryId('note', backendPatient.patient_id, entry.date, entry.note, entry.added_by),
+    date: new Date(entry.date),
+    note: entry.note,
+    addedBy: entry.added_by || 'Unknown',
+  }));
+
+  const labResultsHistory = labResultsHistoryRaw.map(entry => ({
+    id: entry.id || buildStableEntryId('lab', backendPatient.patient_id, entry.date, entry.results, entry.added_by),
+    date: new Date(entry.date),
+    results: entry.results,
+    addedBy: entry.added_by || 'Unknown',
+  }));
+
+  const latestDoctorNoteBackend = backendPatient.latest_doctor_note || doctorNotesHistoryRaw.slice().sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0];
+  const latestLabResultBackend = backendPatient.latest_lab_result || labResultsHistoryRaw.slice().sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0];
+
+  const latestDoctorNote = latestDoctorNoteBackend
+    ? {
+        id: latestDoctorNoteBackend.id || buildStableEntryId('note', backendPatient.patient_id, latestDoctorNoteBackend.date, latestDoctorNoteBackend.note, latestDoctorNoteBackend.added_by),
+        date: new Date(latestDoctorNoteBackend.date),
+        note: latestDoctorNoteBackend.note,
+        addedBy: latestDoctorNoteBackend.added_by || 'Unknown',
+      }
+    : undefined;
+
+  const latestLabResult = latestLabResultBackend
+    ? {
+        id: latestLabResultBackend.id || buildStableEntryId('lab', backendPatient.patient_id, latestLabResultBackend.date, latestLabResultBackend.results, latestLabResultBackend.added_by),
+        date: new Date(latestLabResultBackend.date),
+        results: latestLabResultBackend.results,
+        addedBy: latestLabResultBackend.added_by || 'Unknown',
+      }
+    : undefined;
+
+  const lastVisit = latestDoctorNote?.date ?? null;
+  const primaryPhysician = latestDoctorNote?.addedBy?.trim() || null;
+
+  return {
+    id: backendPatient.patient_id || '',
+    firstName,
+    lastName,
+    recordNumber: backendPatient.recordNumber || backendPatient.patient_id || '',
+    birthDate: normalizedBirthDate || backendPatient.birthDate || '',
+    height: `${backendPatient.height || 0} cm`,
+    weight: `${backendPatient.weight || 0} kg`,
+    labResults: latestLabResult?.results || '',
+    doctorNotes: latestDoctorNote?.note || '',
+    labResultsHistory,
+    doctorNotesHistory,
+    severity: mapSeverity(backendPatient.severity || 'low'),
+    lastVisit,
+    primaryPhysician,
+    createdAt: lastVisit ?? new Date(),
+    updatedAt: lastVisit ?? new Date(),
+  };
+};
+
+export const convertFrontendToBackend = (frontendPatient: PatientFormInput): BackendPatientCreate => {
+  const fullName = `${frontendPatient.firstName || ''} ${frontendPatient.lastName || ''}`.trim();
+  const heightStr = (frontendPatient.height || '').replace(/[^\d.]/g, '');
+  const weightStr = (frontendPatient.weight || '').replace(/[^\d.]/g, '');
+  const normalizedBirthDate = normalizeBirthDate(frontendPatient.birthDate);
+
+  const ensureISODate = (value: unknown): string => {
+    if (value instanceof Date) return value.toISOString();
+    const parsed = new Date(value as string);
+    return Number.isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
+  };
+
+  const labResultsHistory: BackendLabResultEntry[] = ((frontendPatient as Patient).labResultsHistory || []).map((entry: LabResultEntry) => ({
+    id: entry.id,
+    date: ensureISODate(entry.date),
+    results: entry.results,
+    added_by: entry.addedBy,
+  }));
+
+  const doctorNotesHistory: BackendDoctorNoteEntry[] = ((frontendPatient as Patient).doctorNotesHistory || []).map((entry: DoctorNoteEntry) => ({
+    id: entry.id,
+    date: ensureISODate(entry.date),
+    note: entry.note,
+    added_by: entry.addedBy,
+  }));
+
+  const trimmedLabResults = (frontendPatient.labResults || '').trim();
+  if (trimmedLabResults && labResultsHistory.length === 0) {
+    labResultsHistory.push({
+      id: `lab_${Date.now()}`,
+      date: new Date().toISOString(),
+      results: trimmedLabResults,
+      added_by: frontendPatient.primaryPhysician || 'Unknown',
+    });
+  }
+
+  const trimmedDoctorNotes = (frontendPatient.doctorNotes || '').trim();
+  if (trimmedDoctorNotes && doctorNotesHistory.length === 0) {
+    doctorNotesHistory.push({
+      id: `note_${Date.now()}`,
+      date: new Date().toISOString(),
+      note: trimmedDoctorNotes,
+      added_by: frontendPatient.primaryPhysician || 'Unknown',
+    });
+  }
+
+  return {
+    name: fullName,
+    age: calculateAge(normalizedBirthDate || frontendPatient.birthDate),
+    birthDate: normalizedBirthDate || frontendPatient.birthDate,
+    height: heightStr || '0',
+    weight: weightStr || '0',
+    severity: mapSeverityToBackend(frontendPatient.severity),
+    lab_results_history: labResultsHistory,
+    doctors_notes_history: doctorNotesHistory,
+  };
+};
+
+export const mapSeverity = (backendSeverity: string): 'Stage 1' | 'Stage 2' | 'Stage 3' | 'Stage 4' | 'Stage 5' => {
+  const normalized = (backendSeverity || '').trim().toLowerCase();
+  const mapping: Record<string, 'Stage 1' | 'Stage 2' | 'Stage 3' | 'Stage 4' | 'Stage 5'> = {
+    'stage 1': 'Stage 1',
+    'stage 2': 'Stage 2',
+    'stage 3': 'Stage 3',
+    'stage 4': 'Stage 4',
+    'stage 5': 'Stage 5',
+    low: 'Stage 1',
+    mild: 'Stage 2',
+    medium: 'Stage 3',
+    moderate: 'Stage 3',
+    high: 'Stage 4',
+    severe: 'Stage 5',
+  };
+
+  return mapping[normalized] ?? 'Stage 1';
+};
+
+const mapSeverityToBackend = (frontendSeverity: string): string => {
+  const normalized = (frontendSeverity || '').trim().toLowerCase();
+  const mapping: Record<string, string> = {
+    'stage 1': 'Stage 1',
+    'stage 2': 'Stage 2',
+    'stage 3': 'Stage 3',
+    'stage 4': 'Stage 4',
+    'stage 5': 'Stage 5',
+    low: 'Stage 1',
+    mild: 'Stage 2',
+    medium: 'Stage 3',
+    moderate: 'Stage 3',
+    high: 'Stage 4',
+    severe: 'Stage 5',
+  };
+
+  return mapping[normalized] ?? 'Stage 1';
+};

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { ArrowLeft, Play, FileText, Activity, Video, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -6,9 +6,44 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { useToast } from '@/hooks/use-toast';
-import { Patient, Test, AVAILABLE_TESTS } from '@/types/patient';
-import apiService from '@/services/api';
+import { Patient, Test, AVAILABLE_TESTS, TestIndicator } from '@/types/patient';
+import { getPatient } from '@/services/patients';
+import { getPatientTests } from '@/services/tests';
 import { getSeverityColor, calculateAge } from '@/lib/utils';
+import { Input } from '@/components/ui/input';
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+
+const indicatorBadgeClasses: Record<TestIndicator['color'], string> = {
+  success: 'bg-success text-success-foreground',
+  warning: 'bg-warning text-warning-foreground',
+  destructive: 'bg-destructive text-destructive-foreground',
+  muted: 'bg-muted text-muted-foreground',
+};
+
+const testTypeStyles: Record<Test['type'], { container: string; badge: string }> = {
+  'stand-and-sit': {
+    container: 'border-l-4 border-l-emerald-500/80 bg-emerald-50/40',
+    badge: 'border border-emerald-200 bg-emerald-100 text-emerald-700',
+  },
+  'finger-tapping': {
+    container: 'border-l-4 border-l-sky-500/80 bg-sky-50/40',
+    badge: 'border border-sky-200 bg-sky-100 text-sky-700',
+  },
+  'fist-open-close': {
+    container: 'border-l-4 border-l-amber-500/80 bg-amber-50/40',
+    badge: 'border border-amber-200 bg-amber-100 text-amber-700',
+  },
+  unknown: {
+    container: 'border-l-4 border-l-slate-500/80 bg-slate-50/40',
+    badge: 'border border-slate-200 bg-slate-100 text-slate-700',
+  },
+};
 
 const TestSelection = () => {
   const { id } = useParams<{ id: string }>();
@@ -20,6 +55,31 @@ const TestSelection = () => {
   const [loading, setLoading] = useState(false);
   const [loadingPatient, setLoadingPatient] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [testSearch, setTestSearch] = useState('');
+  const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const sortedHistory = useMemo(
+    () => [...testHistory].sort((a, b) => b.date.getTime() - a.date.getTime()),
+    [testHistory]
+  );
+  const filteredHistory = useMemo(() => {
+    const query = testSearch.trim().toLowerCase();
+    if (!query) return sortedHistory;
+    return sortedHistory.filter((test) => {
+      const haystack = [
+        test.name,
+        test.type,
+        test.indicator?.label,
+        test.recordingFile,
+        test.recordingUrl,
+      ]
+        .filter(Boolean)
+        .map((value) => String(value).toLowerCase());
+      return haystack.some((value) => value.includes(query));
+    });
+  }, [sortedHistory, testSearch]);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -27,25 +87,55 @@ const TestSelection = () => {
       setLoadingPatient(true);
       try {
         const [patientRes, testsRes] = await Promise.all([
-          apiService.getPatient(id),
-          apiService.getPatientTests(id),
+          getPatient(id),
+          getPatientTests(id),
         ]);
+
+        // patient
         if (patientRes.success && patientRes.data) {
           setPatient(patientRes.data);
         } else {
           setError(patientRes.error || 'Failed to fetch patient');
         }
+
+        // tests
         if (testsRes.success && testsRes.data) {
           setTestHistory(testsRes.data);
-        } // else ignore for now
-      } catch (err: any) {
-        setError(err.message || 'Failed to connect to server');
+        }
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : 'Failed to connect to server');
       } finally {
         setLoadingPatient(false);
       }
     };
     fetchData();
   }, [id]);
+
+  const handleUploadClick = () => {
+    if (fileInputRef.current){
+      fileInputRef.current.value = "";
+      fileInputRef.current.click();
+    }
+  }
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const allowedTypes = ['video/mp4', 'video/quicktime'];
+    if (!allowedTypes.includes(file.type)){
+      toast({
+        title: "Invalid File Type",
+        description: "please select a .mp4 or .mov video file",
+      });
+      return;
+    }
+    setSelectedFile(file); //this stores the selected file in a state
+    navigate(`/patients/${id}/video-summary`, {
+      state: { file, selectedTests },
+    });
+  }
+
+
 
   const handleTestSelection = (testId: string) => {
     setSelectedTests(prev => 
@@ -66,7 +156,7 @@ const TestSelection = () => {
     }
 
     const testId = `test-${Date.now()}`;
-    navigate(`/patient/${id}/video-recording/${testId}`, {
+    navigate(`/patients/${id}/video-recording/${testId}`, {
     state: { selectedTests },
   });
   }
@@ -88,7 +178,7 @@ const TestSelection = () => {
         <div className="container mx-auto px-6 py-6">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-4">
-              <Link to={`/patient/${id}`}>
+              <Link to={`/patients/${id}`}>
                 <Button variant="outline" size="sm">
                   <ArrowLeft className="mr-2 h-4 w-4" />
                   Back to Patient
@@ -117,59 +207,131 @@ const TestSelection = () => {
                 <CardTitle>Patient Summary</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div>
-                  <p className="text-sm font-medium text-muted-foreground">Name</p>
-                  <p className="font-semibold">{patient.firstName} {patient.lastName}</p>
-                </div>
-                <div>
-                  <p className="text-sm font-medium text-muted-foreground">Age</p>
-                  <p className="font-semibold">{calculateAge(patient.birthDate)} years</p>
-                </div>
-                <div>
-                  <p className="text-sm font-medium text-muted-foreground">Record Number</p>
-                  <p className="font-semibold">{patient.recordNumber}</p>
-                </div>
-                <div>
-                  <p className="text-sm font-medium text-muted-foreground">Severity</p>
-                  <Badge className={getSeverityColor(patient.severity)} variant="secondary">
-                    {patient.severity}
-                  </Badge>
-                </div>
-                <Separator />
-                <div>
-                  <p className="text-sm font-medium text-muted-foreground mb-2">Recent Notes</p>
-                  <div className="bg-muted p-3 rounded-md">
-                    <p className="text-sm">{patient.doctorNotes}</p>
+                <div className="flex flex-wrap gap-x-8 gap-y-3">
+                  <div className="space-y-1 min-w-[140px]">
+                    <p className="text-sm font-medium text-muted-foreground">Name</p>
+                    <p className="font-semibold">{patient.firstName} {patient.lastName}</p>
+                  </div>
+                  <div className="space-y-1 min-w-[140px]">
+                    <p className="text-sm font-medium text-muted-foreground">Age</p>
+                    <p className="font-semibold">{calculateAge(patient.birthDate)} years</p>
                   </div>
                 </div>
+                <div className="flex flex-wrap items-start gap-x-8 gap-y-3">
+                  <div className="space-y-1 min-w-[140px]">
+                    <p className="text-sm font-medium text-muted-foreground">Record Number</p>
+                    <p className="font-semibold">{patient.recordNumber}</p>
+                  </div>
+                  <div className="space-y-1 min-w-[140px]">
+                    <p className="text-sm font-medium text-muted-foreground">Severity</p>
+                    <Badge className={getSeverityColor(patient.severity)} variant="secondary">
+                      {patient.severity}
+                    </Badge>
+                  </div>
+                </div>
+              <Separator />
+              <div>
+                <p className="text-sm font-medium text-muted-foreground mb-2">Recent Notes</p>
+                <div className="bg-muted p-3 rounded-md">
+                  <p className="text-sm">
+                    {patient.doctorNotes || 'No recent notes'}
+                  </p>
+                </div>
+              </div>
               </CardContent>
             </Card>
             {/* Test History */}
             <Card>
               <CardHeader>
-                <CardTitle className="flex items-center">
-                  <FileText className="mr-2 h-5 w-5" />
-                  Previous Tests
-                </CardTitle>
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                  <CardTitle className="flex items-center">
+                    <FileText className="mr-2 h-5 w-5" />
+                    Previous Tests
+                  </CardTitle>
+                  <div className="w-full lg:w-72">
+                    <Input
+                      placeholder="Search tests by name or type..."
+                      value={testSearch}
+                      onChange={(event) => setTestSearch(event.target.value)}
+                      className="h-9"
+                    />
+                  </div>
+                </div>
               </CardHeader>
               <CardContent>
-                <div className="space-y-3">
-                  {testHistory.slice(-3).map((test) => (
-                    <div key={test.id} className="border rounded-lg p-3">
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <p className="font-medium text-sm">{test.name}</p>
-                          <p className="text-xs text-muted-foreground">
-                            {test.date ? new Date(test.date).toLocaleDateString() : ''}
-                          </p>
+                <div className="space-y-3 max-h-[24rem] lg:max-h-[30rem] overflow-y-auto pr-1">
+                  {filteredHistory.length > 0 ? (
+                    filteredHistory.map((test) => {
+                      const badgeVariant = test.indicator ? indicatorBadgeClasses[test.indicator.color] : indicatorBadgeClasses.muted;
+                      const typeStyle = testTypeStyles[test.type] ?? {
+                        container: 'border-l-4 border-l-slate-400/70 bg-muted/40',
+                        badge: 'border border-slate-200 bg-muted text-muted-foreground',
+                      };
+                      const metaPieces: string[] = [];
+                      if (typeof test.frameCount === 'number' && Number.isFinite(test.frameCount)) {
+                        metaPieces.push(`${test.frameCount} frames`);
+                      }
+                      if (typeof test.fps === 'number' && Number.isFinite(test.fps)) {
+                        metaPieces.push(`${test.fps.toFixed(1)} fps`);
+                      }
+                      if (typeof test.similarity === 'number' && Number.isFinite(test.similarity)) {
+                        metaPieces.push(`Similarity ${(test.similarity * 100).toFixed(1)}%`);
+                      }
+
+                      return (
+                        <div
+                          key={test.id}
+                          className={`border rounded-lg p-3 transition-colors ${typeStyle.container}`}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2">
+                                <p className="font-medium text-sm">{test.name}</p>
+                                <Badge
+                                  variant="outline"
+                                  className={`uppercase tracking-wide text-[10px] ${typeStyle.badge}`}
+                                >
+                                  {test.type.replace(/-/g, ' ')}
+                                </Badge>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                                <span>{test.date ? test.date.toLocaleString() : 'Unknown date'}</span>
+                                {metaPieces.map((piece) => (
+                                  <span key={piece} className="inline-flex items-center gap-1">
+                                    <span className="opacity-50">•</span>
+                                    {piece}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                            <Badge variant="secondary" className={badgeVariant}>
+                              {test.indicator?.label ?? test.status}
+                            </Badge>
+                          </div>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {test.summaryAvailable && (
+                              <Link to={`/patients/${id}/video-summary/${encodeURIComponent(test.id)}`}>
+                                <Button size="sm" variant="outline">
+                                  View Results
+                                </Button>
+                              </Link>
+                            )}
+                            {test.videoUrl && (
+                              <a href={test.videoUrl} target="_blank" rel="noreferrer">
+                                <Button size="sm" variant="ghost">
+                                  Open Recording
+                                </Button>
+                              </a>
+                            )}
+                          </div>
                         </div>
-                        <Badge variant="secondary" className="bg-success text-success-foreground">
-                          {test.status}
-                        </Badge>
-                      </div>
-                    </div>
-                  ))}
-                  {testHistory.length === 0 && (
+                      );
+                    })
+                  ) : testHistory.length > 0 ? (
+                    <p className="text-sm text-muted-foreground text-center py-4">
+                      No tests match "{testSearch}"
+                    </p>
+                  ) : (
                     <p className="text-sm text-muted-foreground text-center py-4">
                       No previous tests recorded
                     </p>
@@ -242,11 +404,19 @@ const TestSelection = () => {
                     variant="outline"
                     disabled={selectedTests.length === 0}
                     className="h-24 flex-col"
+                    onClick={() => setIsUploadModalOpen(true)}
                   >
                     <Upload className="h-8 w-8 mb-2" />
                     <span className="font-semibold">Upload Video</span>
                     <span className="text-xs text-muted-foreground">Upload existing video file</span>
                   </Button>
+                  {/* <input
+                    ref={fileInputRef}
+                    type='file'
+                    accept='.mp4, .mov'
+                    style={{display: 'none'}}
+                    onChange={handleFileChange}
+                  /> */}
                 </div>
                 {selectedTests.length > 0 && (
                   <div className="mt-4 p-4 bg-medical-light rounded-lg">
@@ -270,8 +440,36 @@ const TestSelection = () => {
           </div>
         </div>
       </div>
+
+      {/*Upload menu */}
+  <Dialog open={isUploadModalOpen} onOpenChange={setIsUploadModalOpen}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Upload Video for Selected Tests</DialogTitle>
+        </DialogHeader>
+        <div className="grid gap-4 py-4">
+          {/* Need to work on the dialog box formating for selecting tests */}
+          <Button variant='outline' onClick={handleUploadClick}>
+            <Upload className = "mr-2 h-4 w-4">Select Video File</Upload>
+          </Button>
+          <input
+            ref={fileInputRef}
+            type='file'
+            accept='.mp4, .mov'
+            style={{display: 'none'}}
+            onChange={handleFileChange}
+          />
+        </div>
+        <DialogFooter>
+          <Button variant="secondary" onClick={() => setIsUploadModalOpen(false)}>Cancel</Button>
+
+        </DialogFooter>
+      </DialogContent>
+    </Dialog> 
+
     </div>
   );
+
 };
 
 export default TestSelection;

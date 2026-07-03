@@ -22,8 +22,8 @@ export interface Patient {
   weight: string;
   labResults: string; // Keep for backward compatibility
   doctorNotes: string; // Keep for backward compatibility
-  labResultsHistory?: LabResultEntry[];
-  doctorNotesHistory?: DoctorNoteEntry[];
+  labResultsHistory: LabResultEntry[];
+  doctorNotesHistory: DoctorNoteEntry[];
   severity: 'Stage 1' | 'Stage 2' | 'Stage 3' | 'Stage 4' | 'Stage 5';
   lastVisit?: Date | null;
   primaryPhysician?: string | null;
@@ -31,14 +31,29 @@ export interface Patient {
   updatedAt: Date;
 }
 
+export interface TestIndicator {
+  color: 'success' | 'warning' | 'destructive' | 'muted';
+  label: string;
+  description: string;
+}
+
 export interface Test {
   id: string;
   patientId: string;
   name: string;
-  type: 'stand-and-sit' | 'palm-open';
+  type: 'stand-and-sit' | 'finger-tapping' | 'fist-open-close' | 'unknown';
   date: Date;
   status: 'completed' | 'in-progress' | 'pending';
   videoUrl?: string;
+  recordingUrl?: string;
+  recordingFile?: string;
+  summaryAvailable?: boolean;
+  frameCount?: number | null;
+  fps?: number | null;
+  similarity?: number | null;
+  distance?: number | null;
+  dtwSessionId?: string | null;
+  indicator?: TestIndicator;
   results?: TestResults;
 }
 

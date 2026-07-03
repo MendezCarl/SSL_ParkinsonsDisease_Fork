@@ -1,5 +1,5 @@
 # Logs
-logs
+logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
@@ -7,37 +7,74 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
-*.local
+# Dependencies / build artifacts
+node_modules/
+dist/
+dist-ssr/
+.next/
+out/
+coverage/
+*.tgz
+*.tar.gz
 
-# Editor directories and files
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+venv/
+.venv/
+*.egg-info/
+
+# Local databases and generated binary assets
+*.db
+*.npz
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
+
+# Environment / local config
+*.local
+.env
+.env.*
+
+# Editor / IDE
 .vscode/*
 !.vscode/extensions.json
-.idea
-.DS_Store
+.idea/
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
-
-#DB Files
-*.db
-<<<<<<< Updated upstream
-*.mp4
-*.mov
-*.avi
-*.npz
-=======
-/backend/__pycache__
->>>>>>> Stashed changes
-backend/__pycache__/patient_manager.cpython-310.pyc
 SSL_ParkinsonsDisease_Fork.code-workspace
-backend/__pycache__/patient_manager.cpython-310.pyc
-backend/__pycache__/patient_manager.cpython-310.pyc
+
+# OS-specific
+.DS_Store
+Thumbs.db
+ehthumbs.db
+
+# Temporary or accidental local files
 frontend/src/pages/VideoRecording copy.tsx
-/backend/recordings
-/backend/dtw_runs/finger-tapping
-/backend/dtw_runs/fist-open-close
+
+# Backend runtime data
+backend/data/app.db
+backend/data/test.db
+backend/data/test_history.json
+backend/data/dtw_runs/
+backend/data/labelled_training_data/
+backend/data/recordings/
+backend/data/templates/
+backend/data/jsons/
+
+# Legacy source-adjacent generated paths kept during migration review
+backend/recordings/
+backend/jsons/
+backend/routes/dtw_runs/
+backend/routes/_labelled_training_data/
+backend/routes/recordings/
+backend/routes/templates/
+
+# Legacy model files
+backend/lstm_classifier.legacy_incompatible.pt

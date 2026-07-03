@@ -1,37 +1,68 @@
+import { Suspense, lazy } from "react";
 import { Toaster } from "@/components/ui/toaster";
-import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
-import PatientList from "./pages/PatientList";
-import PatientDetails from "./pages/PatientDetails";
-import PatientForm from "./pages/PatientForm";
-import TestSelection from "./pages/TestSelection";
-import VideoRecording from "./pages/VideoRecording";
-import VideoSummary from "./pages/VideoSummary";
-import NotFound from "./pages/NotFound";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { AuthProvider } from "@/auth/auth-context";
+import { useAuth } from "@/auth/auth-context";
 
-const queryClient = new QueryClient();
+const PatientList = lazy(() => import("./pages/PatientList"));
+const PatientDetails = lazy(() => import("./pages/PatientDetails"));
+const PatientForm = lazy(() => import("./pages/PatientForm"));
+const TestSelection = lazy(() => import("./pages/TestSelection"));
+const VideoRecording = lazy(() => import("./pages/VideoRecording"));
+const VideoSummary = lazy(() => import("./pages/VideoSummary"));
+const Timeline = lazy(() => import("./pages/Timeline"));
+const NotFound = lazy(() => import("./pages/NotFound"));
+const Login = lazy(() => import("./pages/Login"));
+const Register = lazy(() => import("./pages/Register"));
+const Profile = lazy(() => import("./pages/Profile"));
+const Welcome = lazy(() => import("./pages/Welcome"));
+
+const ProtectedRoute = ({ children }: { children: JSX.Element }) => {
+  const { isAuthenticated, isLoading } = useAuth();
+
+  if (isLoading) {
+    return <div className="min-h-screen flex items-center justify-center">Loading session...</div>;
+  }
+
+  if (!isAuthenticated) {
+    return <Navigate to="/login" replace />;
+  }
+
+  return children;
+};
+
+const RouteFallback = () => (
+  <div className="min-h-screen flex items-center justify-center">Loading page...</div>
+);
 
 const App = () => (
-  <QueryClientProvider client={queryClient}>
+  <AuthProvider>
     <TooltipProvider>
       <Toaster />
-      <Sonner />
       <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<PatientList />} />
-          <Route path="/patient/:id" element={<PatientDetails />} />
-          <Route path="/patient-form" element={<PatientForm />} />
-          <Route path="/patient-form/:id" element={<PatientForm />} />
-          <Route path="/patient/:id/test-selection" element={<TestSelection />} />
-          <Route path="/patient/:id/video-recording/:testId" element={<VideoRecording />} />
-          <Route path="/patient/:id/video-summary/:testId" element={<VideoSummary />} />
-          <Route path="*" element={<NotFound />} />
-        </Routes>
+        <Suspense fallback={<RouteFallback />}>
+          <Routes>
+            <Route path="/" element={<Navigate to="/patients" replace />} />
+            <Route path="/patients" element={<ProtectedRoute><PatientList /></ProtectedRoute>} />
+            <Route path="/patients/new" element={<ProtectedRoute><PatientForm /></ProtectedRoute>} />
+            <Route path="/patients/:id" element={<ProtectedRoute><PatientDetails /></ProtectedRoute>} />
+            <Route path="/patients/:id/edit" element={<ProtectedRoute><PatientForm /></ProtectedRoute>} />
+            <Route path="/patients/:id/test-selection" element={<ProtectedRoute><TestSelection /></ProtectedRoute>} />
+            <Route path="/patients/:id/video-recording/:testId" element={<ProtectedRoute><VideoRecording /></ProtectedRoute>} />
+            <Route path="/patients/:id/video-summary" element={<ProtectedRoute><VideoSummary /></ProtectedRoute>} />
+            <Route path="/patients/:id/video-summary/:testId" element={<ProtectedRoute><VideoSummary /></ProtectedRoute>} />
+            <Route path="/patients/:patientId/timeline" element={<ProtectedRoute><Timeline /></ProtectedRoute>} />
+            <Route path="/login" element={<Login />}/>
+            <Route path="/register" element={<Register />}/>
+            <Route path="/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>}/>
+            <Route path="/welcome" element={<Welcome />}/>
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        </Suspense>
       </BrowserRouter>
     </TooltipProvider>
-  </QueryClientProvider>
+  </AuthProvider>
 );
 
 export default App;

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams, useNavigate, Link, useLocation } from "react-router-dom";
 import {
   ArrowLeft,
@@ -14,13 +14,23 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
 import { AVAILABLE_TESTS } from "@/types/patient";
+import { uploadVideo } from "@/services/uploads";
 
 type MPHandPoint = { x: number; y: number; z?: number };
 type MPPosePoint = { x: number; y: number; z?: number; v?: number };
+type WSKeypointsMessage = {
+  model?: "hands" | "pose";
+  hands?: { landmarks?: MPHandPoint[] }[];
+  pose?: MPPosePoint[];
+};
 
 // --- WebSocket URL builder
 const WS_PATH = "/ws/camera";
-const wsURL = () => new URL(WS_PATH, window.location.origin).toString();
+const wsURL = () => {
+  const url = new URL(WS_PATH, window.location.origin);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return url.toString();
+};
 
 const modelForTest = (testId?: string) => {
   switch (testId) {
@@ -35,6 +45,7 @@ const modelForTest = (testId?: string) => {
 };
 
 const MIN_RECORDING_TIME = 12; // seconds
+const FEATURE_LANDMARKS = [1, 2, 3, 4, 5, 6, 7, 8] as const;
 
 const VideoRecording = () => {
   const { id, testId } = useParams<{ id: string; testId: string }>();
@@ -71,7 +82,7 @@ const VideoRecording = () => {
   const recordedChunks = useRef<Blob[]>([]);
   const recordingRef = useRef(false);
 
-  const ensureCameraStream = async (): Promise<boolean> => {
+  const ensureCameraStream = useCallback(async (): Promise<boolean> => {
     if (mediaStreamRef.current && mediaStreamRef.current.active) {
       if (videoRef.current && videoRef.current.srcObject !== mediaStreamRef.current) {
         videoRef.current.srcObject = mediaStreamRef.current;
@@ -99,9 +110,9 @@ const VideoRecording = () => {
       });
       return false;
     }
-  };
+  }, [toast]);
 
-  const releaseCameraStream = () => {
+  const releaseCameraStream = useCallback(() => {
     const stream = mediaStreamRef.current;
     if (stream) {
       stream.getTracks().forEach((track) => track.stop());
@@ -115,7 +126,7 @@ const VideoRecording = () => {
       const ctx = overlay.getContext("2d");
       if (ctx) ctx.clearRect(0, 0, overlay.width, overlay.height);
     }
-  };
+  }, []);
 
   useEffect(() => {
     recordingRef.current = isRecording;
@@ -125,13 +136,38 @@ const VideoRecording = () => {
   const wsRef = useRef<WebSocket | null>(null);
   const rafRef = useRef<number | null>(null);
   const lastSentRef = useRef<number>(0);
+  const sequenceFramesRef = useRef<number[][]>([]);
   const sendFps = 15; // throttle frame sends
+
+  const extractFrameFeatures = (msg: WSKeypointsMessage): number[] | null => {
+    if (msg?.model !== "hands" || !Array.isArray(msg?.hands) || msg.hands.length === 0) {
+      return null;
+    }
+
+    const landmarks = msg.hands[0]?.landmarks;
+    if (!Array.isArray(landmarks) || landmarks.length < 21) {
+      return null;
+    }
+
+    const features: number[] = [];
+    for (const idx of FEATURE_LANDMARKS) {
+      const p = landmarks[idx];
+      if (!p || typeof p.x !== "number" || typeof p.y !== "number") {
+        return null;
+      }
+      features.push(p.x, p.y, typeof p.z === "number" ? p.z : 0);
+    }
+
+    return features.length === 24 ? features : null;
+  };
 
   // ---- Regular COMPUTER CAMERA init ----
   useEffect(() => {
     if (selectedTests.length === 0) {
       return undefined;
     }
+
+    const overlay = overlayRef.current;
 
     let isMounted = true;
     (async () => {
@@ -163,9 +199,9 @@ const VideoRecording = () => {
       }
 
       recordedChunks.current = [];
+      sequenceFramesRef.current = [];
       releaseCameraStream();
 
-      const overlay = overlayRef.current;
       if (overlay) {
         const ctx = overlay.getContext("2d");
         if (ctx) ctx.clearRect(0, 0, overlay.width, overlay.height);
@@ -176,7 +212,7 @@ const VideoRecording = () => {
         rafRef.current = null;
       }
     };
-  }, [selectedTests.length]);
+  }, [ensureCameraStream, releaseCameraStream, selectedTests.length]);
 
   // ---- Recording timer ----
   useEffect(() => {
@@ -212,7 +248,13 @@ const VideoRecording = () => {
     ws.onmessage = (ev) => {
       try {
         const msg = JSON.parse(ev.data);
-        if (msg.type === "keypoints") drawKeypoints(msg);
+        if (msg.type === "keypoints") {
+          drawKeypoints(msg);
+          const frameFeatures = extractFrameFeatures(msg);
+          if (frameFeatures) {
+            sequenceFramesRef.current.push(frameFeatures);
+          }
+        }
       } catch {
         /* ignore */
       }
@@ -298,7 +340,7 @@ const VideoRecording = () => {
   };
 
   // ---- Draw keypoints on overlay (crisp with DPR) ----
-  const drawKeypoints = (msg: any) => {
+  const drawKeypoints = (msg: WSKeypointsMessage) => {
     const overlay = overlayRef.current;
     const video = videoRef.current;
     if (!overlay || !video) return;
@@ -314,6 +356,9 @@ const VideoRecording = () => {
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, overlay.width, overlay.height);
+
+    ctx.fillStyle = "#00ff88";
+    ctx.strokeStyle = "#00ff88";
 
     const dot = (x: number, y: number) => {
       ctx.beginPath();
@@ -426,6 +471,7 @@ const VideoRecording = () => {
     recordingRef.current = true;
 
     recordedChunks.current = [];
+    sequenceFramesRef.current = [];
     const stream = videoRef.current.srcObject as MediaStream;
     const mediaRecorder = new MediaRecorder(stream, {
       mimeType: "video/webm",
@@ -487,12 +533,9 @@ const VideoRecording = () => {
         formData.append("video", blob, "recording.webm");
 
         try {
-          const resp = await fetch("/api/upload-video/", {
-            method: "POST",
-            body: formData,
-          });
-          if (resp.ok) {
-            const data = await resp.json();
+          const response = await uploadVideo(formData);
+          if (response.success && response.data) {
+            const data = response.data;
             const diskHint = data?.disk_path
               ? data.disk_path
               : data?.filename
@@ -502,12 +545,9 @@ const VideoRecording = () => {
               title: "Recording Saved",
               description: diskHint ? `Saved to ${diskHint}` : `Saved as ${data.filename}`,
             });
-            if (data?.filename) {
-              console.info(
-                `[VideoRecording] Saved video '${data.filename}' at '${diskHint || "(unknown path)"}'`
-              );
-            }
-          } else throw new Error("Upload failed");
+          } else {
+            throw new Error(response.error || "Upload failed");
+          }
         } catch (err) {
           console.error("Upload error:", err);
           toast({
@@ -516,6 +556,8 @@ const VideoRecording = () => {
             variant: "destructive",
           });
         }
+
+        sequenceFramesRef.current = [];
 
         setCompletedTests((prev) => {
           if (!activeTestId || prev.includes(activeTestId)) {
@@ -564,7 +606,7 @@ const VideoRecording = () => {
   void ensureCameraStream();
     } else {
       releaseCameraStream();
-      navigate(`/patient/${id}/video-summary/${testId}`);
+      navigate(`/patients/${id}/video-summary/${testId}`);
     }
   };
 
@@ -613,6 +655,7 @@ const VideoRecording = () => {
     }
 
     recordedChunks.current = [];
+    sequenceFramesRef.current = [];
     setIsRecording(false);
     setIsPaused(false);
     setRecordingTime(0);
@@ -681,7 +724,7 @@ const VideoRecording = () => {
               There are no tests queued for recording. Please return to the test selection page and choose at least one assessment to begin.
             </p>
             <Button asChild>
-              <Link to={`/patient/${id}/test-selection`}>
+              <Link to={`/patients/${id}/test-selection`}>
                 Back to Test Selection
               </Link>
             </Button>
@@ -698,7 +741,7 @@ const VideoRecording = () => {
         <div className="container mx-auto px-6 py-6">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-4">
-              <Link to={`/patient/${id}/test-selection`}>
+              <Link to={`/patients/${id}/test-selection`}>
                 <Button variant="outline" size="sm">
                   <ArrowLeft className="mr-2 h-4 w-4" />
                   Back to Selection
@@ -957,7 +1000,7 @@ const VideoRecording = () => {
                       ) : (
                         <Button
                           onClick={() =>
-                            navigate(`/patient/${id}/video-summary/${testId}`)
+                            navigate(`/patients/${id}/video-summary/${testId}`)
                           }
                           className="bg-primary hover:bg-primary-hover"
                         >

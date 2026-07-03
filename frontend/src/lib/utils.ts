@@ -26,21 +26,32 @@ export const getSeverityColor = (severity: Patient['severity']) => {
 
 export const calculateAge = (birthdate: Patient['birthDate']) => {
   // yyyy-mm-dd
+  if (!birthdate || typeof birthdate !== 'string') {
+    return 0;
+  }
+  
   try {
     const [year, month, day] = birthdate.split('-').map(Number);
+    
+    // Validate that we got valid numbers
+    if (isNaN(year) || isNaN(month) || isNaN(day)) {
+      return 0;
+    }
+    
     const today = new Date();
     let age = today.getFullYear() - year;
 
+    // Check if birthday hasn't occurred yet this year
     if(
-      today.getMonth() < month - 1 ||
-      (today.getMonth() === month -1 && today.getDate() < day)
+      today.getMonth() + 1 < month ||
+      (today.getMonth() + 1 === month && today.getDate() < day)
     ){
       age--
     }
 
-    return age;
+    return age >= 0 ? age : 0;
   } catch (error) {
-    console.error("Invalid birthdate format:");
-    return null;
+    console.error("Invalid birthdate format:", error);
+    return 0;
   }
 }
