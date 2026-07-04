@@ -6,8 +6,9 @@ from pathlib import Path
 
 
 import numpy as np
-from typing import List, Optional, Dict
-from routes.utils_dtw import EndOnlyDTW, normalize_test_name, generate_session_id
+from typing import List, Optional, Dict, Any
+from schema.keypoint_contracts import build_hand_payload, build_pose_payload
+from services.dtw_service import dtw_service
 from services.recording_service import save_frames_to_mp4
 from services.test_history_service import append_patient_test, build_completed_test_history_entry
 from fastapi import APIRouter
@@ -108,28 +109,33 @@ class MPExtractor:
 
         if self.model == "hands":
             result = self.solution.detect(mp_image)
-            out: dict = {"model": "hands", "hands": []}
+            hands: list[list[dict[str, float]]] = []
+            labels: list[str | None] = []
             if result.hand_landmarks:
                 for i, hand_lm in enumerate(result.hand_landmarks):
                     pts = [{"x": lm.x, "y": lm.y, "z": lm.z} for lm in hand_lm]
                     handedness = None
                     if result.handedness and i < len(result.handedness):
                         handedness = result.handedness[i][0].category_name
-                    out["hands"].append({"landmarks": pts, "handedness": handedness})
-            return out
+                    hands.append(pts)
+                    labels.append(handedness)
+            return build_hand_payload(hands, labels)
 
         elif self.model == "pose":
             result = self.solution.detect(mp_image)
-            out = {"model": "pose", "pose": []}
             if result.pose_landmarks:
                 lm_list = result.pose_landmarks[0]
                 pts = [
-                    {"x": lm.x, "y": lm.y, "z": lm.z,
-                     "v": lm.visibility if hasattr(lm, "visibility") else 0.0}
+                    {
+                        "x": lm.x,
+                        "y": lm.y,
+                        "z": lm.z,
+                        "visibility": lm.visibility if hasattr(lm, "visibility") else 0.0,
+                    }
                     for lm in lm_list
                 ]
-                out["pose"] = pts
-            return out
+                return build_pose_payload(pts)
+            return build_pose_payload([])
 
         return {"error": "Unknown model"}
 
@@ -158,7 +164,7 @@ async def _camera_ws_handler(websocket: WebSocket):
     started: bool = False
 
     mp_extractor: Optional[MPExtractor] = None
-    dtw_end: Optional[EndOnlyDTW] = None
+    dtw_end: Optional[Any] = None
 
     try:
         while True:
@@ -170,13 +176,13 @@ async def _camera_ws_handler(websocket: WebSocket):
                 try:
                     patient_id = data.get("patientId") or data.get("patient_id")
                     raw_test = data.get("testType") or data.get("test_name")
-                    test_name = normalize_test_name(raw_test)          # canonicalize
+                    test_name = dtw_service.normalize_test_name(raw_test)
                     model = data.get("model", model)                   # "hands" | "pose"
                     fps_hint = float(data.get("fps", fps_hint))
                     client_test_id = data.get("testId")
-                    session_id = generate_session_id()
+                    session_id = dtw_service.new_session_id()
                     mp_extractor = MPExtractor(model=model)
-                    dtw_end = EndOnlyDTW(test_name or "unknown", model, session_id)
+                    dtw_end = dtw_service.create_live_session(test_name or "unknown", model, session_id)
 
                     # Surface template init errors immediately
                     if getattr(dtw_end, "init_error", None):

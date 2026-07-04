@@ -124,8 +124,18 @@ export function getRecordingUrl(filename: string): string {
   return `${API_BASE}/recordings/${encodeURIComponent(filename)}`;
 }
 
-export async function lookupDtwSession(sessionId: string, signal?: AbortSignal): Promise<ServiceResponse<DtwSessionLookup>> {
-  return requestJSON<DtwSessionLookup>(`/dtw/sessions/lookup/${encodeURIComponent(sessionId)}`, { signal });
+export async function lookupDtwSession(
+  sessionId: string,
+  patientId?: string,
+  signal?: AbortSignal
+): Promise<ServiceResponse<DtwSessionLookup>> {
+  const query = patientId
+    ? `?patient_id=${encodeURIComponent(patientId)}`
+    : '';
+  return requestJSON<DtwSessionLookup>(
+    `/dtw/sessions/lookup/${encodeURIComponent(sessionId)}${query}`,
+    { signal }
+  );
 }
 
 export async function listPatientVideos(patientId: string, testKey: string, signal?: AbortSignal): Promise<ServiceResponse<string[]>> {
@@ -139,8 +149,18 @@ export async function listPatientVideos(patientId: string, testKey: string, sign
   return { success: true, data: response.data?.success ? response.data.videos ?? [] : [] };
 }
 
-export async function listDtwSessions(testKey: string, signal?: AbortSignal): Promise<ServiceResponse<DtwSessionMeta[]>> {
-  return requestJSON<DtwSessionMeta[]>(`/dtw/sessions/${encodeURIComponent(testKey)}`, { signal });
+export async function listDtwSessions(
+  testKey: string,
+  patientId?: string,
+  signal?: AbortSignal
+): Promise<ServiceResponse<DtwSessionMeta[]>> {
+  const query = patientId
+    ? `?patient_id=${encodeURIComponent(patientId)}`
+    : '';
+  return requestJSON<DtwSessionMeta[]>(
+    `/dtw/sessions/${encodeURIComponent(testKey)}${query}`,
+    { signal }
+  );
 }
 
 export async function getDtwSeries(

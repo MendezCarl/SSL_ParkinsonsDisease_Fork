@@ -598,7 +598,7 @@ const VideoSummary = () => {
 
     const ctrl = new AbortController();
     (async () => {
-      const response = await lookupDtwSession(testId, ctrl.signal);
+      const response = await lookupDtwSession(testId, id, ctrl.signal);
       if (response.success && response.data) {
         const key = normalizeTestKey(response.data.testName);
         if (!key) {
@@ -633,25 +633,34 @@ const VideoSummary = () => {
         if (videos.length > 0) {
           setVideoList(videos);
           setSelectedVideo(videos[0]);
+        } else if (currentTest?.recordingFile) {
+          // Fallback: use current test's recording file directly
+          setVideoList([currentTest.recordingFile]);
+          setSelectedVideo(currentTest.recordingFile);
         } else {
           setVideoList([]);
           setSelectedVideo(null);
         }
       } else {
         console.error("Error fetching videos:", response.error);
-        setVideoList([]);
-        setSelectedVideo(null);
+        if (currentTest?.recordingFile) {
+          setVideoList([currentTest.recordingFile]);
+          setSelectedVideo(currentTest.recordingFile);
+        } else {
+          setVideoList([]);
+          setSelectedVideo(null);
+        }
       }
     })();
     return () => ctrl.abort();
-  }, [routeResolved, id, testKey]);
+  }, [routeResolved, id, testKey, currentTest?.recordingFile]);
 
   // List DTW sessions
   useEffect(() => {
-    if (!routeResolved || !testKey) return;
+    if (!routeResolved || !testKey || !id) return;
     const ctrl = new AbortController();
     (async () => {
-      const response = await listDtwSessions(testKey, ctrl.signal);
+      const response = await listDtwSessions(testKey, id, ctrl.signal);
       if (response.success && response.data) {
         setSessions(response.data);
         setSessionId((prev) => prev ?? response.data?.[0]?.session_id ?? null);
@@ -662,7 +671,7 @@ const VideoSummary = () => {
       }
     })();
     return () => ctrl.abort();
-  }, [routeResolved, testKey]);
+  }, [routeResolved, testKey, id]);
 
   // Fetch KPI metrics (distance, avg step cost, similarity) from /series
   useEffect(() => {

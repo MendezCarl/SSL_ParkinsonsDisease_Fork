@@ -14,14 +14,17 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
 import { AVAILABLE_TESTS } from "@/types/patient";
+import {
+  EXPECTED_LANDMARKS,
+  HAND_CONNECTION_CHAINS,
+  POSE_CONNECTIONS,
+  primaryDetection,
+  type KeypointDetection,
+  type KeypointLandmark,
+  type KeypointPayload,
+} from "@/types/keypoint-contract";
 
-type MPHandPoint = { x: number; y: number; z?: number };
-type MPPosePoint = { x: number; y: number; z?: number; v?: number };
-type WSKeypointsMessage = {
-  model?: "hands" | "pose";
-  hands?: { landmarks?: MPHandPoint[] }[];
-  pose?: MPPosePoint[];
-};
+type WSKeypointsMessage = Partial<KeypointPayload>;
 
 type WsEventMessage = WSKeypointsMessage & {
   type?: string;
@@ -238,12 +241,13 @@ const VideoRecording = () => {
     : lastCompletedSessionId || testId;
 
   const extractFrameFeatures = (msg: WSKeypointsMessage): number[] | null => {
-    if (msg?.model !== "hands" || !Array.isArray(msg?.hands) || msg.hands.length === 0) {
+    if (msg?.model !== "hands" || !Array.isArray(msg?.detections)) {
       return null;
     }
 
-    const landmarks = msg.hands[0]?.landmarks;
-    if (!Array.isArray(landmarks) || landmarks.length < 21) {
+    const primaryHand = primaryDetection(msg as KeypointPayload, 'hand');
+    const landmarks = primaryHand?.landmarks;
+    if (!Array.isArray(landmarks) || landmarks.length < EXPECTED_LANDMARKS.hands) {
       return null;
     }
 
@@ -491,23 +495,18 @@ const VideoRecording = () => {
       ctx.lineTo(x2, y2);
       ctx.stroke();
     };
-    const toPx = (p: { x: number; y: number }) => ({
+    const toPx = (p: Pick<KeypointLandmark, 'x' | 'y'>) => ({
       x: p.x * (overlay.width / dpr),
       y: p.y * (overlay.height / dpr),
     });
 
-    if (msg.model === "hands" && Array.isArray(msg.hands)) {
-      const chains = [
-        [0, 1, 2, 3, 4],
-        [0, 5, 6, 7, 8],
-        [0, 9, 10, 11, 12],
-        [0, 13, 14, 15, 16],
-        [0, 17, 18, 19, 20],
-      ];
-      for (const hand of msg.hands as { landmarks: MPHandPoint[] }[]) {
+    if (msg.model === "hands" && Array.isArray(msg.detections)) {
+      for (const hand of msg.detections.filter(
+        (detection): detection is KeypointDetection => detection.kind === 'hand'
+      )) {
         const pts = hand.landmarks;
         ctx.lineWidth = 2;
-        for (const ch of chains) {
+        for (const ch of HAND_CONNECTION_CHAINS) {
           for (let i = 0; i < ch.length - 1; i++) {
             const a = toPx(pts[ch[i]]),
               b = toPx(pts[ch[i + 1]]);
@@ -521,35 +520,21 @@ const VideoRecording = () => {
       }
     }
 
-    if (msg.model === "pose" && Array.isArray(msg.pose)) {
-      const pts = msg.pose as MPPosePoint[];
+    if (msg.model === "pose" && Array.isArray(msg.detections)) {
+      const pts = primaryDetection(msg as KeypointPayload, 'pose')?.landmarks ?? [];
       for (const p of pts) {
-        if (p.v !== undefined && p.v < 0.5) continue;
+        if (p.visibility !== undefined && p.visibility < 0.5) continue;
         const { x, y } = toPx(p);
         dot(x, y);
       }
-      const pairs = [
-        [11, 12],
-        [11, 13],
-        [13, 15],
-        [12, 14],
-        [14, 16],
-        [11, 23],
-        [12, 24],
-        [23, 24],
-        [23, 25],
-        [24, 26],
-        [25, 27],
-        [26, 28],
-      ];
       ctx.lineWidth = 2;
-      for (const [i, j] of pairs) {
+      for (const [i, j] of POSE_CONNECTIONS) {
         const a = pts[i],
           b = pts[j];
         if (!a || !b) continue;
         if (
-          (a.v !== undefined && a.v < 0.5) ||
-          (b.v !== undefined && b.v < 0.5)
+          (a.visibility !== undefined && a.visibility < 0.5) ||
+          (b.visibility !== undefined && b.visibility < 0.5)
         )
           continue;
         const ap = toPx(a),

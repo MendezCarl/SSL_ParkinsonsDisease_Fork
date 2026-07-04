@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import json
 from uuid import uuid4
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 from tslearn.metrics import dtw_path
+from schema.keypoint_contracts import EXPECTED_LANDMARKS, primary_landmarks
 from storage_paths import DTW_RUNS_DIR, TEMPLATES_DIR
 
 # ================== BASE PATHS ==================
@@ -59,7 +60,7 @@ def _ensure_dir(p: Path) -> None:
 
 
 def generate_session_id() -> str:
-    ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
     sid = uuid4().hex[:8]
     return f"{ts}_{sid}"
 
@@ -94,11 +95,8 @@ def _hands_features(kp: Dict) -> Optional[np.ndarray]:
     - Scale: distance wrist->middle MCP (id 9)
     - Output: flattened 42D vector (21*2)
     """
-    hands = kp.get("hands", [])
-    if not hands:
-        return None
-    lm = hands[0].get("landmarks", [])
-    if len(lm) < 21:
+    lm = primary_landmarks(kp, "hand")
+    if not lm or len(lm) < EXPECTED_LANDMARKS["hands"]:
         return None
 
     pts = np.array([[p["x"], p["y"]] for p in lm], dtype=np.float32)  # (21,2)
@@ -108,8 +106,8 @@ def _hands_features(kp: Dict) -> Optional[np.ndarray]:
     return (rel / scale).reshape(-1)              # (42,)
 
 def _pose_features(kp: Dict, use_z: bool = False) -> Optional[np.ndarray]:
-    pose = kp.get("pose", [])
-    if not pose or len(pose) < 33:
+    pose = primary_landmarks(kp, "pose")
+    if not pose or len(pose) < EXPECTED_LANDMARKS["pose"]:
         return None
     if use_z:
         pts = np.array([[p["x"], p["y"], p.get("z", 0.0)] for p in pose], dtype=np.float32)  # (33,3)
@@ -201,7 +199,7 @@ def save_dtw_npz(
         canonical = "stand-and-sit" if "sit" in (test_name or "") else \
                     "finger-tapping" if "finger" in (test_name or "") else "fist-open-close"
 
-    ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
     folder = (DTW_BASE / canonical / session_id)
     _ensure_dir(folder)
 
