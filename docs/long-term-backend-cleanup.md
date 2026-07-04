@@ -8,6 +8,8 @@ The recent cleanup established:
 
 - `backend/data/` as the canonical home for runtime-generated artifacts.
 - `backend/legacy/` as the archive location for old scripts, camera utilities, and flat-file data.
+- `backend/services/dtw_service.py` as the active DTW session/artifact service layer.
+- `shared/keypoint-contract.json` as the canonical shared websocket keypoint contract schema.
 - `backend/main.py`, `backend/patient_manager.py`, `backend/process_healthy_videos.py`, and `backend/storage_paths.py` still at the backend root because they are active and moving them now would create unnecessary import and workflow churn.
 
 ## Top-Level Python Files To Revisit Later
@@ -66,12 +68,14 @@ Goals:
 
 ### 2. Refactor `patient_manager.py`
 
-`patient_manager.py` currently mixes multiple concerns:
+`patient_manager.py` still mixes multiple concerns:
 
 - database setup
 - patient CRUD orchestration
 - test-name normalization
 - test-history flat-file persistence
+
+Some of the planned service extraction has already happened elsewhere (`PatientService`, `RecordingService`, `TestHistoryService`, `DtwService`), but `patient_manager.py` itself is still a large active module.
 
 Possible future split:
 
@@ -110,6 +114,8 @@ Future goal:
 - document exactly which DBs are authoritative
 - remove obsolete DB artifacts after team confirmation
 
+The current authoritative runtime SQLite database is `backend/data/app.db`. The surrounding files remain because the repository has been migrated in-place and older artifacts were preserved for review rather than deleted aggressively.
+
 ### 5. Clean test discovery and Python package structure further
 
 One issue already surfaced during verification: non-test modules had names that pytest tried to collect.
@@ -141,6 +147,15 @@ Future decision needed:
 4. Standardize package/import structure for backend modules.
 5. Revisit whether test history should remain JSON-backed.
 6. Remove obsolete legacy/database artifacts only after team approval.
+
+## No Longer Future Work
+
+These items were previously prospective but now exist in the active codebase:
+
+- DTW route/service extraction via `backend/services/dtw_service.py`
+- patient-scoped DTW session APIs
+- normalized websocket keypoint contract
+- one canonical shared keypoint schema source at `shared/keypoint-contract.json`
 
 ## Caution
 

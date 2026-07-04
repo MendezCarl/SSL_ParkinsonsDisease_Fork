@@ -165,10 +165,6 @@ Verification:
 
 ## Remaining Follow-Ups
 
-### VideoSummary commit separation
-
-`frontend/src/pages/VideoSummary.tsx` contains the Module 6 cleanup, but the file also had pre-existing in-progress edits in the worktree. The cleanup is verified locally, but should be reviewed and committed separately once those concurrent edits are reconciled.
-
 ### Registration
 
 Frontend registration is intentionally not connected yet. The current backend does not yet provide a matching safe minimal account-creation endpoint.
@@ -177,6 +173,8 @@ Frontend registration is intentionally not connected yet. The current backend do
 
 Profile viewing is real. Profile editing still needs a backend update endpoint and matching frontend mutation flow.
 
-### DTW session scoping
+## Resolved Since This Cleanup Log
 
-DTW sessions in `VideoSummary` are still fetched per test type rather than per patient.
+- DTW sessions in `VideoSummary` are now fetched with patient scoping rather than by test type alone.
+- Historical DTW session lookup now supports legacy folder-name compatibility and canonical session ids.
+- The websocket keypoint payload is now normalized through the shared contract at `shared/keypoint-contract.json`.

@@ -103,6 +103,16 @@ Mild — client code currently does not check for errors from these endpoints, s
 - VideoSummary resolves the correct DTW session for any historical test entry.
 - Frontend overlay and backend DTW extraction consume from a shared payload type.
 
+### Implementation status
+- Implemented canonical per-attempt session ids minted by the backend.
+- Implemented patient-scoped DTW session lookup/listing via `GET /dtw/sessions/lookup/{session_id}?patient_id=...` and `GET /dtw/sessions/{test_name}?patient_id=...`.
+- Implemented legacy alias resolution so DTW REST can resolve older runs where the folder name and `meta.json["session_id"]` differ.
+- Implemented a normalized websocket keypoint contract based on `model + detections[] + landmarks[]`.
+- Active consumers now read the normalized contract in:
+  - `backend/routes/utils_dtw.py`
+  - `frontend/src/pages/VideoRecording.tsx`
+- Runtime/service ownership now lives in `backend/services/dtw_service.py`.
+
 ---
 
 ## Phase 3 — Decouple Backend Route Logic from Business Logic
@@ -125,6 +135,11 @@ Mild — client code currently does not check for errors from these endpoints, s
 - `patient_manager.py` no longer imports from `routes/contracts.py` (dependency direction is the correct way).
 - Routes do not directly write files, run DTW, or open database sessions — they delegate to services.
 - All existing endpoint contracts remain unchanged.
+
+### Implementation status
+- `PatientService`, `RecordingService`, `TestHistoryService`, and `DtwService` now exist as explicit service modules.
+- `backend/routes/dtw_rest.py` delegates DTW session lookup, patient scoping, artifact reads, and label persistence through `backend/services/dtw_service.py`.
+- `backend/routes/websockets.py` delegates DTW session creation/test normalization through `DtwService` while continuing to own websocket transport concerns.
 
 ---
 
@@ -178,6 +193,13 @@ Phase 5 is a *verification pass*: after Phases 1 and 2, check that no business l
 - No frontend code knows landmark counts or dimensionality for specific test types.
 - The frontend imports payload types from a single source rather than redefining them.
 
+### Implementation status
+- CSV/date/severity/default-value logic was moved out of the frontend in earlier phases.
+- Websocket payload handling now consumes a single normalized contract from `shared/keypoint-contract.json` via language-specific wrappers in:
+  - `backend/schema/keypoint_contracts.py`
+  - `frontend/src/types/keypoint-contract.ts`
+- Frontend overlay/feature capture no longer depends on ad hoc `hands` / `pose` websocket message assumptions.
+
 ---
 
 ## Phase 6 — Integration Verification
@@ -198,6 +220,17 @@ Confirm that the refactored system behaves identically to the pre-refactor syste
 - Backend starts without errors (import paths, module resolution).
 - Manual or automated E2E walkthrough of each critical flow.
 - No 404, 422, or 500 errors that were not present before the refactor.
+
+### Implementation status
+- Added backend integration coverage for:
+  - `/`, `/health`, `/docs`, `/openapi.json`
+  - `/token` and `/me`
+  - patient CRUD, search, filter, lab results, doctor notes
+  - CSV import endpoint
+  - `/upload-video/`, `/patients/{id}/tests`, `/videos/{id}/{test}`
+  - websocket recording flow at `/ws/camera`
+- Added migration coverage for historical DTW folder/session normalization and test-history backfill.
+- Frontend production build passes against the final DTW/session/payload changes.
 
 ---
 

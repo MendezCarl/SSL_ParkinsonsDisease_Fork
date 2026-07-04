@@ -43,20 +43,18 @@ curl -L "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_la
 
 ### 4. Start the backend
 
-In one terminal:
-
-```bash
-source .venv/bin/activate
-python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-Run that command from the `backend/` directory:
+In one terminal, run the backend from the `backend/` directory:
 
 ```bash
 cd backend
 source ../.venv/bin/activate
 python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
+
+Why this matters:
+- `main:app` is resolved relative to the `backend/` module layout.
+- Runtime data paths are rooted under `backend/data/`.
+- Local development is least surprising when the backend is started from `backend/` as documented.
 
 Backend URLs:
 - API root: `http://localhost:8000/`
@@ -122,6 +120,20 @@ python process_healthy_videos.py --force
 python process_healthy_videos.py --no-rebuild-template
 ```
 
+## Optional Historical DTW Migration
+
+If you want to normalize older DTW folder names and backfill historical test-history entries with canonical DTW metadata, run:
+
+```bash
+source .venv/bin/activate
+python backend/scripts/migrate_historical_dtw.py
+```
+
+Notes:
+- This migration is conservative and only backfills historical test-history rows when the DTW match is unambiguous.
+- Runtime DTW artifacts remain under `backend/data/dtw_runs/`.
+- Runtime recordings remain under `backend/data/recordings/`.
+
 ## Frontend Commands
 
 From `frontend/`:
@@ -158,6 +170,13 @@ Re-run the model download commands and confirm these files exist:
 - `backend/models/hand_landmarker.task`
 - `backend/models/pose_landmarker_lite.task`
 
+### Websocket recording does not start
+
+Check:
+- the MediaPipe model files exist under `backend/models/`
+- the backend was started from the `backend/` directory
+- the frontend dev server is proxying `/ws/*` to the backend
+
 ### ML prediction endpoints fail
 
 The project can run without the external ML checkpoint, but inference endpoints may fail if the checkpoint is missing.
@@ -165,6 +184,9 @@ The project can run without the external ML checkpoint, but inference endpoints 
 ## Related Docs
 
 - `docs/swagger-api-docs.md`
+- `docs/current-architecture.md`
+- `docs/data-storage-model.md`
+- `docs/dtw-recording-flow.md`
 - `docs/frontend-backend-integration-cleanup.md`
 - `README.md`
 - `backend/README.md`
