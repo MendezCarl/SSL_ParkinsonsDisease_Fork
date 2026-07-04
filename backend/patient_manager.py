@@ -114,7 +114,7 @@ def _parse_number(value, lo: float, hi: float) -> Optional[float]:
 
 def _gen_patient_id(name: str) -> str:
     base = (name or "").lower().replace(" ", "")[:5] or "pt"
-    return f"{base}{int(datetime.now().timestamp())}"
+    return f"{base}{uuid4().hex[:8]}"
 
 
 def _next_record_number(session: Session) -> str:

@@ -16,7 +16,7 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from repo.sql_models import User
 from patient_manager import SessionLocal
 from storage_paths import RECORDINGS_DIR
-from routes.utils_dtw import generate_session_id
+from routes.utils_dtw import generate_session_id, normalize_test_name
 from services.recording_service import save_uploaded_video
 from services.test_history_service import (
     append_patient_test,
@@ -187,6 +187,9 @@ class VideoListResponse(BaseModel):
     error: str | None = None
 
 
+_VIDEO_EXTENSIONS = (".mov", ".mp4", ".webm", ".avi", ".mkv")
+
+
 def serialize_user(user: User) -> CurrentUserResponse:
     return CurrentUserResponse(
         username=user.username,
@@ -212,7 +215,7 @@ def normalize_test_history_entry(raw: Dict[str, Any]) -> PatientTestHistoryEntry
     return PatientTestHistoryEntry(
         test_id=raw.get("test_id"),
         test_name=str(raw.get("test_name") or "unknown"),
-        date=str(raw.get("date") or datetime.utcnow().isoformat()),
+        date=str(raw.get("date") or datetime.now(timezone.utc).isoformat()),
         recording_file=raw.get("recording_file"),
         frame_count=raw.get("frame_count"),
         fps=raw.get("fps"),
@@ -388,14 +391,34 @@ async def upload_video(
 )
 def list_videos(patient_id: str, test_name: str):
     try:
-        files = os.listdir(RECORDINGS_DIR)
-        matching = [
-            f for f in files
-            if f.startswith(f"{patient_id}_{test_name}_") and (f.endswith(".mov") or f.endswith(".mp4"))
-        ]
-        matching.sort(
+        normalized_target = normalize_test_name(test_name)
+        seen: set[str] = set()
+
+        # 1. Collect recording files from test history entries whose test_name matches
+        for entry in load_patient_tests(patient_id):
+            raw_test_name = entry.get("test_name") or ""
+            if normalize_test_name(raw_test_name) != normalized_target:
+                continue
+            recording_file = entry.get("recording_file")
+            if recording_file and recording_file.lower().endswith(_VIDEO_EXTENSIONS):
+                filepath = RECORDINGS_DIR / recording_file
+                if filepath.exists():
+                    seen.add(recording_file)
+
+        # 2. Fallback: filename pattern match for files not yet recorded in test history
+        try:
+            for f in os.listdir(RECORDINGS_DIR):
+                if f in seen:
+                    continue
+                if f.startswith(f"{patient_id}_{test_name}_") and f.lower().endswith(_VIDEO_EXTENSIONS):
+                    seen.add(f)
+        except OSError:
+            pass
+
+        matching = sorted(
+            seen,
             key=lambda f: os.path.getmtime(RECORDINGS_DIR / f),
-            reverse=True
+            reverse=True,
         )
         return {"success": True, "videos": matching}
     except Exception as e:

@@ -114,4 +114,4 @@ async def search_patients_endpoint(query: str):
 
 @router.post("/filter/", response_model=PatientSearchResponse)
 async def filter_patients_endpoint(criteria: FilterCriteria):
-    return await patient_service.filter_patients(criteria.dict(exclude_none=True))
+    return await patient_service.filter_patients(criteria.model_dump(exclude_none=True))

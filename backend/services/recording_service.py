@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import shutil
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import BinaryIO, List
 from uuid import uuid4
@@ -35,7 +35,7 @@ def build_recording_filename(
 ) -> str:
     patient_token = _safe_token(patient_id, "unknown")
     test_token = _safe_token(test_name, "unknown")
-    session_token = _safe_token(session_id, datetime.utcnow().strftime("%Y%m%dT%H%M%S"))
+    session_token = _safe_token(session_id, datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S"))
     ext = extension if extension.startswith(".") else f".{extension}"
     return f"{patient_token}_{test_token}_{session_token}{ext}"
 
