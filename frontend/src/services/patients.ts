@@ -9,11 +9,25 @@ import {
   type BackendPatientUpdate,
   convertBackendToFrontend,
   convertFrontendToBackend,
-  normalizeBirthDate,
   type PatientFormInput,
   type PatientUpdateInput,
 } from '@/services/patient-mappers';
 import type { ServiceResponse } from '@/services/service-response';
+
+export interface BackendPatientImportRowError {
+  row: number;
+  errors: Record<string, string>;
+  error?: string | null;
+  raw: Record<string, string>;
+}
+
+export interface BackendPatientImportResult {
+  success: boolean;
+  success_count: number;
+  failure_count: number;
+  imported_patient_ids: string[];
+  errors: BackendPatientImportRowError[];
+}
 
 export async function getPatients(skip: number = 0, limit: number = 100): Promise<ServiceResponse<Patient[]>> {
   const response = await apiClient.request<{ patients: BackendPatient[]; total: number }>(`/patients/?skip=${skip}&limit=${limit}`);
@@ -44,6 +58,16 @@ export async function createPatient(patientData: PatientFormInput): Promise<Serv
   return { success: false, error: response.error };
 }
 
+export async function importPatientsCsv(file: File): Promise<ServiceResponse<BackendPatientImportResult>> {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  return apiClient.request<BackendPatientImportResult>('/patients/import/csv', {
+    method: 'POST',
+    body: formData,
+  });
+}
+
 export async function updatePatient(patientId: string, updateData: PatientUpdateInput): Promise<ServiceResponse<Patient>> {
   const backendData: BackendPatientUpdate = {};
 
@@ -52,8 +76,7 @@ export async function updatePatient(patientId: string, updateData: PatientUpdate
   }
 
   if (updateData.birthDate !== undefined) {
-    const normalized = normalizeBirthDate(updateData.birthDate);
-    backendData.birthDate = normalized || updateData.birthDate;
+    backendData.birthDate = updateData.birthDate;
   }
 
   if (updateData.height) {

@@ -9,6 +9,7 @@ import { useToast } from '@/hooks/use-toast';
 import { Patient, Test, AVAILABLE_TESTS, TestIndicator } from '@/types/patient';
 import { getPatient } from '@/services/patients';
 import { getPatientTests } from '@/services/tests';
+import { uploadVideo } from '@/services/uploads';
 import { getSeverityColor, calculateAge } from '@/lib/utils';
 import { Input } from '@/components/ui/input';
 import {
@@ -57,7 +58,6 @@ const TestSelection = () => {
   const [error, setError] = useState<string | null>(null);
   const [testSearch, setTestSearch] = useState('');
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const sortedHistory = useMemo(
@@ -129,10 +129,49 @@ const TestSelection = () => {
       });
       return;
     }
-    setSelectedFile(file); //this stores the selected file in a state
-    navigate(`/patients/${id}/video-summary`, {
-      state: { file, selectedTests },
-    });
+
+    if (!id) {
+      return;
+    }
+
+    if (selectedTests.length !== 1) {
+      toast({
+        title: 'Select One Test',
+        description: 'Upload supports one selected test at a time.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append('patient_id', id);
+    formData.append('test_name', selectedTests[0]);
+    formData.append('video', file, file.name);
+
+    setLoading(true);
+    void (async () => {
+      try {
+        const response = await uploadVideo(formData);
+        if (!response.success || !response.data?.session_id) {
+          throw new Error(response.error || 'Failed to upload video');
+        }
+
+        setIsUploadModalOpen(false);
+        toast({
+          title: 'Video Uploaded',
+          description: 'Recording saved and added to patient history.',
+        });
+        navigate(`/patients/${id}/video-summary/${encodeURIComponent(response.data.session_id)}`);
+      } catch (err) {
+        toast({
+          title: 'Upload Failed',
+          description: err instanceof Error ? err.message : 'Could not upload video.',
+          variant: 'destructive',
+        });
+      } finally {
+        setLoading(false);
+      }
+    })();
   }
 
 
@@ -402,12 +441,12 @@ const TestSelection = () => {
                   </Button>
                   <Button
                     variant="outline"
-                    disabled={selectedTests.length === 0}
+                    disabled={selectedTests.length === 0 || loading}
                     className="h-24 flex-col"
                     onClick={() => setIsUploadModalOpen(true)}
                   >
                     <Upload className="h-8 w-8 mb-2" />
-                    <span className="font-semibold">Upload Video</span>
+                    <span className="font-semibold">{loading ? 'Uploading...' : 'Upload Video'}</span>
                     <span className="text-xs text-muted-foreground">Upload existing video file</span>
                   </Button>
                   {/* <input
@@ -449,8 +488,9 @@ const TestSelection = () => {
         </DialogHeader>
         <div className="grid gap-4 py-4">
           {/* Need to work on the dialog box formating for selecting tests */}
-          <Button variant='outline' onClick={handleUploadClick}>
-            <Upload className = "mr-2 h-4 w-4">Select Video File</Upload>
+          <Button variant='outline' onClick={handleUploadClick} disabled={loading}>
+            <Upload className="mr-2 h-4 w-4" />
+            Select Video File
           </Button>
           <input
             ref={fileInputRef}
@@ -461,7 +501,7 @@ const TestSelection = () => {
           />
         </div>
         <DialogFooter>
-          <Button variant="secondary" onClick={() => setIsUploadModalOpen(false)}>Cancel</Button>
+          <Button variant="secondary" onClick={() => setIsUploadModalOpen(false)} disabled={loading}>Cancel</Button>
 
         </DialogFooter>
       </DialogContent>

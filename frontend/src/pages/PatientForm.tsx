@@ -10,7 +10,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useToast } from '@/hooks/use-toast';
 import { Patient } from '@/types/patient';
 import { addPatientDoctorNote, addPatientLabResult, createPatient, getPatient, updatePatient } from '@/services/patients';
-import { normalizeBirthDate } from '@/services/patient-mappers';
 import { calculateAge } from '@/lib/utils';
 
 const PatientForm = () => {
@@ -36,11 +35,6 @@ const PatientForm = () => {
   const [loading, setLoading] = useState(false);
 
   const handleInputChange = (field: string, value: string) => {
-    if (field === 'birthDate') {
-      const normalized = normalizeBirthDate(value);
-      setFormData(prev => ({ ...prev, [field]: normalized || value }));
-      return;
-    }
     setFormData(prev => ({ ...prev, [field]: value }));
   };
 
@@ -54,7 +48,7 @@ const PatientForm = () => {
           firstName: patient.firstName,
           lastName: patient.lastName,
           recordNumber: patient.recordNumber,
-          birthDate: normalizeBirthDate(patient.birthDate) || patient.birthDate.toString(),
+          birthDate: patient.birthDate.toString(),
           height: patient.height,
           weight: patient.weight,
           labResults: patient.labResults,
@@ -98,21 +92,10 @@ const PatientForm = () => {
     }
 
     try {
-      const normalizedBirthDate = normalizeBirthDate(formData.birthDate);
-      if (!normalizedBirthDate) {
-        toast({
-          title: "Invalid Birthdate",
-          description: "Enter a valid date (e.g., 1980-05-12 or 05/12/1980).",
-          variant: "destructive",
-        });
-        setLoading(false);
-        return;
-      }
-
       const patientData = {
         firstName: formData.firstName,
         lastName: formData.lastName,
-        birthDate: normalizedBirthDate,
+        birthDate: formData.birthDate,
         height: formData.height || '170 cm',
         weight: formData.weight || '70 kg',
         labResults: formData.labResults || '{}',

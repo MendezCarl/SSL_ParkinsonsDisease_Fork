@@ -25,8 +25,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useToast } from '@/hooks/use-toast';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Patient, DoctorNoteEntry } from '@/types/patient';
-import { createPatient, deletePatient, getPatients } from '@/services/patients';
-import { normalizeBirthDate } from '@/services/patient-mappers';
+import { createPatient, deletePatient, getPatients, importPatientsCsv } from '@/services/patients';
 import { useApiStatus } from '@/hooks/use-api-status';
 import { getSeverityColor, calculateAge } from '@/lib/utils';
 import { useAuth } from '@/auth/auth-context';
@@ -54,17 +53,6 @@ const stageOrder: Record<Patient['severity'], number> = {
   'Stage 3': 3,
   'Stage 4': 4,
   'Stage 5': 5,
-};
-
-type CsvPatientDraft = {
-  firstName: string;
-  lastName: string;
-  birthDate: string;
-  height: string;
-  weight: string;
-  labResults: string;
-  doctorNotes: string;
-  severity: string;
 };
 
 const getLatestDoctorNote = (patient: Patient): DoctorNoteEntry | null => {
@@ -274,6 +262,10 @@ const PatientList = () => {
 
   const handleCsvFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0] || null;
+    if (!file) {
+      setCsvFile(null);
+      return;
+    }
     if (!file.name.endsWith('.csv')) {
       toast({
         title: "Invalid File Type",
@@ -285,262 +277,46 @@ const PatientList = () => {
     setCsvFile(file);
   };
 
-  const parseCSVLine = (line: string) => {
-    const result: string[] = [];
-    let cur = '';
-    let inQuotes = false;
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i];
-      if (ch === '"' && line[i + 1] === '"') {
-        cur += '"';
-        i++; // skip escape
-        continue;
-      }
-      if (ch === '"') {
-        inQuotes = !inQuotes;
-        continue;
-      }
-      if (ch === ',' && !inQuotes) {
-        result.push(cur.trim());
-        cur = '';
-        continue;
-      }
-      cur += ch;
-    }
-    result.push(cur.trim());
-    return result;
-  };
-
-  const normalizeHeaderName = (h: string) => {
-    return h
-      .toLowerCase()
-      .replace(/[^a-z0-9]/g, '')
-      .trim();
-  }
-
-  // Parse several common date formats and return ISO yyyy-mm-dd or null
-  // ISO means ISO 8601 date format
-  const parseDateToISO = (val: string): string | null => {
-    if (!val) return null;
-    const s = val.trim();
-
-    // If already ISO yyyy-mm-dd
-    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-
-    // Match numeric formats like dd-mm-yyyy, dd/mm/yyyy, mm/dd/yyyy
-    const m = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
-    if (m) {
-      const a = Number(m[1]);
-      const b = Number(m[2]);
-      const y = Number(m[3]);
-
-      let day: number;
-      let month: number;
-
-      // If first component > 12 it's day
-      if (a > 12) {
-        day = a; month = b;
-      } else if (b > 12) {
-        // If second component > 12 treat first as day
-        day = a; month = b;
-      } else {
-        // Ambiguous: use '-' as dd-mm-yyyy heuristic, '/' as mm/dd/yyyy
-        if (s.includes('-')) {
-          day = a; month = b;
-        } else {
-          month = a; day = b;
-        }
-      }
-
-      if (month < 1 || month > 12 || day < 1 || day > 31) return null;
-      const mm = String(month).padStart(2, '0');
-      const dd = String(day).padStart(2, '0');
-      return `${y}-${mm}-${dd}`;
-    }
-
-    const d = new Date(s);
-    if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
-    return null;
-  };
-
-  const headerToKey = (h:string) => {
-    const n = normalizeHeaderName(h);
-
-    if (['firstname', 'first', 'givenname', 'given'].includes(n)) return 'firstName';
-    if (['lastname', 'last', 'surname', 'familyname'].includes(n)) return 'lastName';
-    if (['fullname', 'name', 'fullName', 'fullname'].includes(n.toLowerCase())) return 'fullName';
-    if (['birthdate', 'dob', 'dateofbirth', 'birth'].includes(n)) return 'birthDate';
-    if (['height', 'ht'].includes(n)) return 'height';
-    if (['weight', 'wt'].includes(n)) return 'weight';
-    if (['recordnumber', 'recordno', 'record', 'id', 'patientid'].includes(n)) return 'recordNumber';
-    if (['severity', 'stage', 'parkinsonseverity'].includes(n)) return 'severity';
-    if (['labresults', 'lab_result', 'labs', 'lab'].includes(n)) return 'labResults';
-    if (['doctornotes', 'doctornote', 'notes', 'note'].includes(n)) return 'doctorNotes';
-    return n; // fallback: keep original normalized header
-  }
-
-  const normalizeSeverity = (val: string | undefined | null) => {
-    if (!val) return '';
-    const v = val.trim();
-    const num = parseInt(v, 10);
-
-    if (!isNaN(num) && num >= 1 && num <= 5) return `Stage ${num}`;
-
-    const m = v.match(/([sS]tage)[_\-\s]?([1-5])/);
-    if (m) return `Stage ${m[2]}`;
-
-    const m2 = v.match(/^[Ss]tage\s*[1-5]$/);
-
-    if (m2) return v.startsWith('Stage') ? v : `Stage ${v.replace(/\D/g, '')}`;
-
-    const low = ['mild', 'low', 'stage1', 'stage_1'];
-    const med = ['moderate', 'medium', 'stage3', 'stage_3'];
-    const high = ['severe', 'high', 'stage5', 'stage_5'];
-    const lower = v.toLowerCase();
-    if (low.includes(lower)) return 'Stage 1';
-    if (med.includes(lower)) return 'Stage 3';
-    if (high.includes(lower)) return 'Stage 5';
-    return v;
-  };
-
   const processCsvFile = async () => {
     if (!csvFile) return;
     setCsvUploading(true);
     try {
-      const text = await csvFile.text();
-      const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
-      if (lines.length < 2) {
+      const response = await importPatientsCsv(csvFile);
+      if (!response.success || !response.data) {
         toast({
-          title: 'Empty CSV',
-          description: 'CSV must contain a header and at least one data row.',
+          title: 'CSV Import Failed',
+          description: response.error || 'Failed to import patients from CSV.',
           variant: 'destructive',
         });
-        setCsvUploading(false);
         return;
       }
 
-      const rawHeader = parseCSVLine(lines[0]);
-      const headerMap: Record<number, string> = {};
-      rawHeader.forEach((h, idx) => {
-        headerMap[idx] = headerToKey(h);
-      });
+      const { success_count, failure_count, errors } = response.data;
 
-      const rows = lines.slice(1);
-      const toCreate: CsvPatientDraft[] = [];
-      for (const row of rows) {
-        const cols = parseCSVLine(row);
-        if (cols.every(c => c === '')) continue;
-
-        const item: CsvPatientDraft = {
-          firstName: '',
-          lastName: '',
-          birthDate: '',
-          height: '',
-          weight: '',
-          labResults: '{}',
-          doctorNotes: '',
-          severity: '',
-        };
-
-        for (let i = 0; i < cols.length; i++) {
-          const key = headerMap[i];
-          const val = cols[i] ?? '';
-          if (!key) continue;
-          switch (key) {
-            case 'firstName':
-              item.firstName = val;
-              break;
-            case 'lastName':
-              item.lastName = val;
-              break;
-            case 'fullName':
-              {
-                const parts = val.split(/\s+/);
-                item.firstName = parts.shift() || '';
-                item.lastName = parts.join(' ') || '';
-              }
-              break;
-            case 'birthDate':
-              {
-                // try to normalize common date formats to yyyy-mm-dd
-                const iso = parseDateToISO(val);
-                if (iso) {
-                  item.birthDate = iso;
-                } else {
-                  item.birthDate = val || '';
-                }
-              }
-              break;
-            case 'height':
-              item.height = val;
-              break;
-            case 'weight':
-              item.weight = val;
-              break;
-            case 'severity':
-              item.severity = normalizeSeverity(val);
-              break;
-            case 'labResults':
-              try {
-                item.labResults = JSON.stringify(JSON.parse(val));
-              } catch {
-                item.labResults = JSON.stringify({ notes: val });
-              }
-              break;
-            case 'doctorNotes':
-              item.doctorNotes = val;
-              break;
-            default:
-              // unknown header, ignores it
-              break;
-          }
-        }
-
-        // Default values for missing fields
-        if (!item.firstName && !item.lastName) {
-          item.firstName = 'Unknown';
-          item.lastName = 'Patient';
-        }
-        if (!item.height) item.height = '170 cm';
-        if (!item.weight) item.weight = '70 kg';
-        if (!item.labResults) item.labResults = JSON.stringify({});
-        if (!item.doctorNotes) item.doctorNotes = 'n/a';
-        if (!item.severity) item.severity = 'Stage 1';
-        if (!item.birthDate) item.birthDate = '';
-        toCreate.push(item);
+      if (success_count > 0) {
+        await fetchPatients();
       }
 
-      if (toCreate.length === 0) {
-        toast({
-          title: 'No valid rows',
-          description: 'No valid patient rows found in CSV.',
-          variant: 'destructive',
-        });
-        setCsvUploading(false);
-        return;
-      }
-
-      let successCount = 0;
-      let failCount = 0;
-      for (const p of toCreate) {
-        try {
-          const response = await createPatient(p);
-          if (response.success && response.data) {
-            setPatients(prev => [...prev, response.data]);
-            successCount++;
-          } else {
-            failCount++;
-            console.error('Create patient failed response:', response);
-          }
-        } catch (err) {
-          failCount++;
-          console.error('Create patient error:', err);
-        }
-      }
+      const sampleErrors = errors
+        .slice(0, 2)
+        .map((entry) => {
+          const fieldErrors = Object.entries(entry.errors || {})
+            .map(([field, message]) => `${field}: ${message}`)
+            .join(', ');
+          return `row ${entry.row}${fieldErrors ? ` (${fieldErrors})` : entry.error ? ` (${entry.error})` : ''}`;
+        })
+        .join('; ');
 
       toast({
-        title: 'CSV Upload Complete',
-        description: `Imported ${successCount} patients. ${failCount} failures.`,
+        title: failure_count > 0 ? 'CSV Import Completed With Issues' : 'CSV Import Complete',
+        description: [
+          `Imported ${success_count} patient${success_count === 1 ? '' : 's'}.`,
+          `${failure_count} failure${failure_count === 1 ? '' : 's'}.`,
+          sampleErrors ? `First issues: ${sampleErrors}.` : '',
+        ]
+          .filter(Boolean)
+          .join(' '),
+        variant: failure_count > 0 ? 'destructive' : 'default',
       });
 
       setCsvFile(null);
@@ -549,7 +325,7 @@ const PatientList = () => {
       console.error('Error processing CSV:', error);
       toast({
         title: "Error",
-        description: "Failed to read the CSV file.",
+        description: "Failed to import the CSV file.",
         variant: "destructive",
       });
     } finally {
@@ -627,11 +403,6 @@ const PatientList = () => {
   });
 
   const handleQuickFormChange = (field: string, value: string) => {
-    if (field === 'birthDate') {
-      const normalized = normalizeBirthDate(value);
-      setQuickFormData(prev => ({ ...prev, [field]: normalized || value }));
-      return;
-    }
     setQuickFormData(prev => ({ ...prev, [field]: value }));
   };
 
@@ -648,21 +419,11 @@ const PatientList = () => {
       return;
     }
 
-    const normalizedBirthDate = normalizeBirthDate(quickFormData.birthDate);
-    if (!normalizedBirthDate) {
-      toast({
-        title: "Invalid Birthdate",
-        description: "Enter a valid date (e.g., 1980-05-12).",
-        variant: "destructive",
-      });
-      return;
-    }
-
     // Create new patient data
     const newPatientData = {
       firstName: quickFormData.firstName,
       lastName: quickFormData.lastName,
-      birthDate: normalizedBirthDate,
+      birthDate: quickFormData.birthDate,
       height: '170 cm', // Default values for quick add
       weight: '70 kg',
       labResults: '{}',

@@ -14,20 +14,33 @@ from routes.websockets import router as ws_router
 from routes.classifier import router as classifier_router
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from repo.sql_models import User
-from jose import jwt, JWTError
-from passlib.context import CryptContext
 from patient_manager import SessionLocal
 from storage_paths import RECORDINGS_DIR
+from routes.utils_dtw import generate_session_id, normalize_test_name
+from services.recording_service import save_uploaded_video
+from services.test_history_service import (
+    append_patient_test,
+    build_uploaded_video_test_history_entry,
+    get_patient_tests as load_patient_tests,
+)
+
+try:
+    from jose import jwt, JWTError
+except ModuleNotFoundError:  # pragma: no cover - exercised in minimal test environments
+    jwt = None
+
+    class JWTError(Exception):
+        pass
+
+try:
+    from passlib.context import CryptContext
+except ModuleNotFoundError:  # pragma: no cover - exercised in minimal test environments
+    CryptContext = None
 
 # ============ Paths / Folders ============
 RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
 
 # ============ Lazy imports (avoid libGL issues on boot) ============
-
-# ============ Patient Manager ============
-from patient_manager import (
-    TestHistoryManager
-)
 
 app = FastAPI(
     title="Patient Management API",
@@ -74,7 +87,17 @@ SECRET_KEY = "stupid_hash_for_now"
 ALGO = "HS256"
 ACCESS_MIN = 30
 
-pwd = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
+if CryptContext is None:
+    class _FallbackPasswordContext:
+        def hash(self, value: str) -> str:
+            return value
+
+        def verify(self, plain: str, hashed: str) -> bool:
+            return plain == hashed
+
+    pwd = _FallbackPasswordContext()
+else:
+    pwd = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 
@@ -154,6 +177,7 @@ class UploadVideoResponse(BaseModel):
     path: str | None = None
     patient_id: str | None = None
     test_name: str | None = None
+    session_id: str | None = None
     error: str | None = None
 
 
@@ -161,6 +185,9 @@ class VideoListResponse(BaseModel):
     success: bool
     videos: List[str] = Field(default_factory=list)
     error: str | None = None
+
+
+_VIDEO_EXTENSIONS = (".mov", ".mp4", ".webm", ".avi", ".mkv")
 
 
 def serialize_user(user: User) -> CurrentUserResponse:
@@ -188,7 +215,7 @@ def normalize_test_history_entry(raw: Dict[str, Any]) -> PatientTestHistoryEntry
     return PatientTestHistoryEntry(
         test_id=raw.get("test_id"),
         test_name=str(raw.get("test_name") or "unknown"),
-        date=str(raw.get("date") or datetime.utcnow().isoformat()),
+        date=str(raw.get("date") or datetime.now(timezone.utc).isoformat()),
         recording_file=raw.get("recording_file"),
         frame_count=raw.get("frame_count"),
         fps=raw.get("fps"),
@@ -240,6 +267,8 @@ def authenticate(username: str, password: str) -> User | None:
         return {"error": "Failed to auth"}
     
 def create_access_token(sub: str) -> str:
+    if jwt is None:
+        raise RuntimeError("python-jose must be installed to create access tokens")
     to_encode = {
         "sub": sub, 
         "exp": datetime.now(timezone.utc) + timedelta(minutes=ACCESS_MIN)
@@ -247,6 +276,8 @@ def create_access_token(sub: str) -> str:
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGO)
 
 async def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
+    if jwt is None:
+        raise HTTPException(status_code=500, detail="python-jose must be installed for authentication")
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGO])
         username: str = payload.get("sub")
@@ -290,8 +321,7 @@ async def health_check():
     summary="Get stored test history for a patient",
 )
 async def get_patient_tests(patient_id: str):
-    thm = TestHistoryManager()
-    tests = thm.get_patient_tests(patient_id)
+    tests = load_patient_tests(patient_id)
     return {"success": True, "tests": [normalize_test_history_entry(test) for test in tests]}
 
 @app.post(
@@ -301,11 +331,10 @@ async def get_patient_tests(patient_id: str):
     summary="Add a test history record for a patient",
 )
 async def add_patient_test(patient_id: str, test_data: PatientTestHistoryEntry = Body(...)):
-    thm = TestHistoryManager()
     payload = test_data.model_dump(exclude_none=True)
     if payload.get("extra"):
         payload.update(payload.pop("extra"))
-    thm.add_patient_test(patient_id, payload)
+    append_patient_test(patient_id, payload)
     return {"success": True}
 
 
@@ -324,19 +353,32 @@ async def upload_video(
     video: UploadFile = File(...)
 ):
     try:
-        now_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        filename = f"{patient_id}_{test_name}_{now_str}.mov"
-        filepath = RECORDINGS_DIR / filename
+        session_id = generate_session_id()
+        filename = save_uploaded_video(
+            patient_id=patient_id,
+            test_name=test_name,
+            upload_file=video.file,
+            original_filename=video.filename,
+            content_type=video.content_type,
+            session_id=session_id,
+        )
 
-        with open(filepath, "wb") as buffer:
-            shutil.copyfileobj(video.file, buffer)
+        append_patient_test(
+            patient_id,
+            build_uploaded_video_test_history_entry(
+                test_name=test_name,
+                session_id=session_id,
+                recording_file=filename,
+            ),
+        )
 
         return {
             "success": True,
             "filename": filename,
             "path": f"recordings/{filename}",
             "patient_id": patient_id,
-            "test_name": test_name
+            "test_name": test_name,
+            "session_id": session_id,
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -349,14 +391,34 @@ async def upload_video(
 )
 def list_videos(patient_id: str, test_name: str):
     try:
-        files = os.listdir(RECORDINGS_DIR)
-        matching = [
-            f for f in files
-            if f.startswith(f"{patient_id}_{test_name}_") and (f.endswith(".mov") or f.endswith(".mp4"))
-        ]
-        matching.sort(
+        normalized_target = normalize_test_name(test_name)
+        seen: set[str] = set()
+
+        # 1. Collect recording files from test history entries whose test_name matches
+        for entry in load_patient_tests(patient_id):
+            raw_test_name = entry.get("test_name") or ""
+            if normalize_test_name(raw_test_name) != normalized_target:
+                continue
+            recording_file = entry.get("recording_file")
+            if recording_file and recording_file.lower().endswith(_VIDEO_EXTENSIONS):
+                filepath = RECORDINGS_DIR / recording_file
+                if filepath.exists():
+                    seen.add(recording_file)
+
+        # 2. Fallback: filename pattern match for files not yet recorded in test history
+        try:
+            for f in os.listdir(RECORDINGS_DIR):
+                if f in seen:
+                    continue
+                if f.startswith(f"{patient_id}_{test_name}_") and f.lower().endswith(_VIDEO_EXTENSIONS):
+                    seen.add(f)
+        except OSError:
+            pass
+
+        matching = sorted(
+            seen,
             key=lambda f: os.path.getmtime(RECORDINGS_DIR / f),
-            reverse=True
+            reverse=True,
         )
         return {"success": True, "videos": matching}
     except Exception as e:
@@ -367,7 +429,12 @@ def get_recording_file(filename: str):
     file_path = RECORDINGS_DIR / filename
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Video not found")
-    media_type = "video/mp4" if filename.endswith(".mp4") else "video/quicktime"
+    if filename.endswith(".webm"):
+        media_type = "video/webm"
+    elif filename.endswith(".mov"):
+        media_type = "video/quicktime"
+    else:
+        media_type = "video/mp4"
     return FileResponse(file_path, media_type=media_type)
 
 # ============ Uvicorn ============

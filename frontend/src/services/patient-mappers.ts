@@ -36,47 +36,6 @@ const STATUS_INDICATORS: Record<TestStatus, TestIndicator> = {
 
 const KNOWN_TEST_TYPES: readonly TestType[] = ['stand-and-sit', 'finger-tapping', 'fist-open-close'] as const;
 
-export function normalizeBirthDate(value: string): string {
-  if (!value) return '';
-  const trimmed = value.trim();
-  if (!trimmed) return '';
-
-  const isoMatch = trimmed.match(/^(\d{4})[/-](\d{2})[/-](\d{2})$/);
-  if (isoMatch) {
-    return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
-  }
-
-  const parsed = new Date(trimmed);
-  if (Number.isNaN(parsed.getTime())) return '';
-
-  const year = parsed.getUTCFullYear();
-  const month = String(parsed.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(parsed.getUTCDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-const calculateAge = (birthDate: string): number => {
-  const normalized = normalizeBirthDate(birthDate);
-  if (!normalized) return 0;
-
-  const [yearStr, monthStr, dayStr] = normalized.split('-');
-  const year = Number(yearStr);
-  const month = Number(monthStr);
-  const day = Number(dayStr);
-
-  if (!year || !month || !day) return 0;
-
-  const today = new Date();
-  let age = today.getFullYear() - year;
-  const monthDiff = today.getMonth() + 1 - month;
-
-  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < day)) {
-    age--;
-  }
-
-  return Math.max(0, age);
-};
-
 const toIsoStamp = (value?: string | null): string => {
   if (!value) return 'unknown-date';
   const parsed = new Date(value);
@@ -168,7 +127,7 @@ export interface BackendTestEntry {
 
 export interface BackendPatientCreate {
   name: string;
-  age: number;
+  age?: number;
   birthDate: string;
   height: string;
   weight: string;
@@ -196,8 +155,12 @@ export interface HealthStatus {
 }
 
 export interface UploadVideoResponse {
+  success?: boolean;
   filename?: string;
-  disk_path?: string;
+  path?: string;
+  patient_id?: string;
+  test_name?: string;
+  session_id?: string;
   [key: string]: unknown;
 }
 
@@ -365,7 +328,6 @@ export const convertBackendToFrontend = (backendPatient: BackendPatient): Patien
   const nameParts = name.split(' ');
   const firstName = nameParts[0] || '';
   const lastName = nameParts.slice(1).join(' ') || '';
-  const normalizedBirthDate = normalizeBirthDate(backendPatient.birthDate);
   const doctorNotesHistoryRaw = backendPatient.doctors_notes_history || [];
   const labResultsHistoryRaw = backendPatient.lab_results_history || [];
 
@@ -412,14 +374,14 @@ export const convertBackendToFrontend = (backendPatient: BackendPatient): Patien
     firstName,
     lastName,
     recordNumber: backendPatient.recordNumber || backendPatient.patient_id || '',
-    birthDate: normalizedBirthDate || backendPatient.birthDate || '',
+    birthDate: backendPatient.birthDate || '',
     height: `${backendPatient.height || 0} cm`,
     weight: `${backendPatient.weight || 0} kg`,
     labResults: latestLabResult?.results || '',
     doctorNotes: latestDoctorNote?.note || '',
     labResultsHistory,
     doctorNotesHistory,
-    severity: mapSeverity(backendPatient.severity || 'low'),
+    severity: mapSeverity(backendPatient.severity || 'Stage 1'),
     lastVisit,
     primaryPhysician,
     createdAt: lastVisit ?? new Date(),
@@ -431,7 +393,6 @@ export const convertFrontendToBackend = (frontendPatient: PatientFormInput): Bac
   const fullName = `${frontendPatient.firstName || ''} ${frontendPatient.lastName || ''}`.trim();
   const heightStr = (frontendPatient.height || '').replace(/[^\d.]/g, '');
   const weightStr = (frontendPatient.weight || '').replace(/[^\d.]/g, '');
-  const normalizedBirthDate = normalizeBirthDate(frontendPatient.birthDate);
 
   const ensureISODate = (value: unknown): string => {
     if (value instanceof Date) return value.toISOString();
@@ -475,50 +436,19 @@ export const convertFrontendToBackend = (frontendPatient: PatientFormInput): Bac
 
   return {
     name: fullName,
-    age: calculateAge(normalizedBirthDate || frontendPatient.birthDate),
-    birthDate: normalizedBirthDate || frontendPatient.birthDate,
+    birthDate: frontendPatient.birthDate,
     height: heightStr || '0',
     weight: weightStr || '0',
-    severity: mapSeverityToBackend(frontendPatient.severity),
+    severity: frontendPatient.severity,
     lab_results_history: labResultsHistory,
     doctors_notes_history: doctorNotesHistory,
   };
 };
 
 export const mapSeverity = (backendSeverity: string): 'Stage 1' | 'Stage 2' | 'Stage 3' | 'Stage 4' | 'Stage 5' => {
-  const normalized = (backendSeverity || '').trim().toLowerCase();
-  const mapping: Record<string, 'Stage 1' | 'Stage 2' | 'Stage 3' | 'Stage 4' | 'Stage 5'> = {
-    'stage 1': 'Stage 1',
-    'stage 2': 'Stage 2',
-    'stage 3': 'Stage 3',
-    'stage 4': 'Stage 4',
-    'stage 5': 'Stage 5',
-    low: 'Stage 1',
-    mild: 'Stage 2',
-    medium: 'Stage 3',
-    moderate: 'Stage 3',
-    high: 'Stage 4',
-    severe: 'Stage 5',
-  };
-
-  return mapping[normalized] ?? 'Stage 1';
-};
-
-const mapSeverityToBackend = (frontendSeverity: string): string => {
-  const normalized = (frontendSeverity || '').trim().toLowerCase();
-  const mapping: Record<string, string> = {
-    'stage 1': 'Stage 1',
-    'stage 2': 'Stage 2',
-    'stage 3': 'Stage 3',
-    'stage 4': 'Stage 4',
-    'stage 5': 'Stage 5',
-    low: 'Stage 1',
-    mild: 'Stage 2',
-    medium: 'Stage 3',
-    moderate: 'Stage 3',
-    high: 'Stage 4',
-    severe: 'Stage 5',
-  };
-
-  return mapping[normalized] ?? 'Stage 1';
+  const normalized = (backendSeverity || '').trim();
+  if (normalized === 'Stage 1' || normalized === 'Stage 2' || normalized === 'Stage 3' || normalized === 'Stage 4' || normalized === 'Stage 5') {
+    return normalized;
+  }
+  return 'Stage 1';
 };

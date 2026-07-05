@@ -11,6 +11,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 import routes.classifier as classifier_routes
+import services.patient_service as patient_service
 from main import app
 
 
@@ -49,7 +50,7 @@ def test_predict_and_update_success(monkeypatch):
         return {"success": True, "patient_id": patient_id}
 
     monkeypatch.setattr(classifier_routes.inference_service, "predict", fake_predict)
-    monkeypatch.setattr(classifier_routes, "async_update_patient_info", fake_update)
+    monkeypatch.setattr(patient_service, "update_patient", fake_update)
 
     client = TestClient(app)
     response = client.post("/ml/updrs/predict/patients/patient123", json=_valid_payload())
@@ -69,7 +70,7 @@ def test_predict_and_update_unknown_patient_returns_404(monkeypatch):
         return {"success": False, "error": "Patient not found"}
 
     monkeypatch.setattr(classifier_routes.inference_service, "predict", fake_predict)
-    monkeypatch.setattr(classifier_routes, "async_update_patient_info", fake_update)
+    monkeypatch.setattr(patient_service, "update_patient", fake_update)
 
     client = TestClient(app)
     response = client.post("/ml/updrs/predict/patients/unknown", json=_valid_payload())
@@ -99,7 +100,7 @@ def test_predict_only_mode_with_unknown_patient_returns_200(monkeypatch):
         raise AssertionError("update should not be called when persist_update=false")
 
     monkeypatch.setattr(classifier_routes.inference_service, "predict", fake_predict)
-    monkeypatch.setattr(classifier_routes, "async_update_patient_info", fake_update)
+    monkeypatch.setattr(patient_service, "update_patient", fake_update)
 
     client = TestClient(app)
     response = client.post(

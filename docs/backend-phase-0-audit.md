@@ -229,6 +229,93 @@ Examples of contract spread:
 
 This is functional, but it is not yet a normalized payload contract.
 
+## Re-audit Delta (Current Branch)
+
+The original audit still broadly holds. A repeat pass against the current branch found these additional issues:
+
+### 12. Websocket `dtw_saved` completion payload still does not expose a session identifier
+
+`backend/routes/utils_dtw.py::save_dtw_npz()` returns `session_id`, artifact paths, and timestamp metadata, but `EndOnlyDTW.finalize_and_save()` discards that return value and only forwards similarity metrics.
+
+Downstream effect:
+
+- `backend/routes/websockets.py` emits `{"type": "dtw_saved", ...}` without the canonical session id
+- the frontend still cannot anchor later REST lookups or history writes to the save result directly
+
+### 13. Retakes reuse the same route-level `testId`, so DTW artifacts can be overwritten
+
+`frontend/src/pages/TestSelection.tsx` generates one `test-<timestamp>` before entering recording. `frontend/src/pages/VideoRecording.tsx` reuses that same route param for every websocket `init`, including retakes.
+
+Because `backend/routes/utils_dtw.py::save_dtw_npz()` stores artifacts under `backend/data/dtw_runs/<test>/<test_id>/`, repeated takes for the same route can write back into the same folder instead of producing a fresh session.
+
+### 14. Test-history contract drift is wider than the original audit captured
+
+`backend/main.py` now publishes a richer `PatientTestHistoryEntry` contract with fields such as:
+
+- `test_id`
+- `fps`
+- `summary_available`
+- `dtw.session_id`
+
+But the live websocket writer in `backend/routes/websockets.py` still persists only:
+
+- `test_name`
+- `date`
+- `recording_file`
+- `frame_count`
+
+This means the public contract now implies capabilities that the live recording path does not populate.
+
+### 15. `backend/legacy/history_manager.py` is a confirmed dead path
+
+Active code still imports `TestHistoryManager` from `backend/patient_manager.py`, not from `backend/legacy/history_manager.py`.
+
+That legacy copy should be treated the same way as the other archived files: present for reference only, not authoritative for the live flow.
+
+### 16. The DTW aggregate contract is inconsistent between frontend and backend
+
+`frontend/src/services/dtw.ts` allows `reduce: "pca1"` for axis aggregates, but `backend/routes/dtw_rest.py` only accepts:
+
+- `mean`
+- `median`
+- `sum`
+- `min`
+- `max`
+
+This is another example of frontend/backend contract drift that should be normalized during the Phase 2 / Phase 5 pass.
+
+### Repeat-audit summary
+
+- No original findings in this audit scope were fully resolved by the current branch.
+- The most important new Phase 2 deltas are missing `dtw_saved.session_id`, retake overwrite risk, and the widened history-schema drift.
+
+## Resolution Update (Current Branch)
+
+The audit above remains the historical record of what was wrong when the refactor was scoped. Since then, the active branch has resolved the main DTW/session/payload issues this audit called out:
+
+- Finding 6: websocket completion messages are now consumed by the frontend recording flow.
+- Finding 7: the backend now mints one canonical DTW session id per recording attempt and returns it through websocket completion payloads.
+- Finding 8: test history now stores canonical `test_id` / `dtw.session_id` values for the live websocket path.
+- Finding 9: DTW REST session lookup and listing now support patient scoping via `patient_id` query parameters.
+- Finding 10: the live recording flow now saves one canonical websocket-owned recording instead of depending on a duplicate REST upload save path.
+- Finding 11: the websocket keypoint payload is now normalized to one explicit contract: `model + detections[] + landmarks[]`.
+- Finding 12: websocket `dtw_saved` now includes the canonical session id.
+- Finding 13: retakes now use a backend-minted fresh session id per attempt, so older DTW artifacts are not overwritten.
+- Finding 14: the live websocket writer now populates the richer history contract fields (`test_id`, `fps`, `summary_available`, `dtw.session_id`).
+- Finding 16: the DTW aggregate contract mismatch was resolved by backend support for `reduce="pca1"` and by normalizing the broader DTW service contract.
+
+Additional structural changes related to these findings:
+
+- DTW route/file/session logic is now centralized in `backend/services/dtw_service.py`.
+- `backend/routes/dtw_rest.py` delegates session lookup, list filtering, artifact reads, and label persistence through that service.
+- `backend/routes/websockets.py` uses the same service for canonical test normalization and DTW session creation.
+- The normalized websocket keypoint contract now has one canonical shared schema source at `shared/keypoint-contract.json`, with backend/frontend wrappers reading from it.
+- Historical DTW artifacts and test-history rows now have an explicit migration path in `backend/services/dtw_migration_service.py` and `backend/scripts/migrate_historical_dtw.py`.
+- The current repository data was migrated with this result:
+  - 11 DTW folders renamed to canonical session ids
+  - 11 historical test-history entries backfilled with canonical DTW metadata
+  - 31 historical entries intentionally left untouched because no unambiguous DTW match could be inferred
+
 ## Confirmed Stale Or Misaligned Paths
 
 These paths should not be treated as authoritative when redesigning the live flow:

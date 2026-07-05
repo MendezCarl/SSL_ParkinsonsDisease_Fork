@@ -1,0 +1,46 @@
+{
+  "payload": {
+    "modelField": "model",
+    "detectionsField": "detections",
+    "detectionKindField": "kind",
+    "detectionLabelField": "label",
+    "landmarksField": "landmarks"
+  },
+  "models": {
+    "hands": {
+      "kind": "hand",
+      "expectedLandmarks": 21,
+      "connections": [
+        [0, 1, 2, 3, 4],
+        [0, 5, 6, 7, 8],
+        [0, 9, 10, 11, 12],
+        [0, 13, 14, 15, 16],
+        [0, 17, 18, 19, 20]
+      ]
+    },
+    "pose": {
+      "kind": "pose",
+      "expectedLandmarks": 33,
+      "connections": [
+        [11, 12],
+        [11, 13],
+        [13, 15],
+        [12, 14],
+        [14, 16],
+        [11, 23],
+        [12, 24],
+        [23, 24],
+        [23, 25],
+        [24, 26],
+        [25, 27],
+        [26, 28]
+      ]
+    }
+  },
+  "landmarkFields": {
+    "x": "x",
+    "y": "y",
+    "z": "z",
+    "visibility": "visibility"
+  }
+}

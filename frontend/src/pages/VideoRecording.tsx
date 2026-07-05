@@ -14,14 +14,28 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
 import { AVAILABLE_TESTS } from "@/types/patient";
-import { uploadVideo } from "@/services/uploads";
+import {
+  EXPECTED_LANDMARKS,
+  HAND_CONNECTION_CHAINS,
+  POSE_CONNECTIONS,
+  primaryDetection,
+  type KeypointDetection,
+  type KeypointLandmark,
+  type KeypointPayload,
+} from "@/types/keypoint-contract";
 
-type MPHandPoint = { x: number; y: number; z?: number };
-type MPPosePoint = { x: number; y: number; z?: number; v?: number };
-type WSKeypointsMessage = {
-  model?: "hands" | "pose";
-  hands?: { landmarks?: MPHandPoint[] }[];
-  pose?: MPPosePoint[];
+type WSKeypointsMessage = Partial<KeypointPayload>;
+
+type WsEventMessage = WSKeypointsMessage & {
+  type?: string;
+  status?: string;
+  sessionId?: string;
+  testName?: string;
+  patientId?: string;
+  recording?: string;
+  path?: string;
+  where?: string;
+  message?: string;
 };
 
 // --- WebSocket URL builder
@@ -60,6 +74,8 @@ const VideoRecording = () => {
   const [recordingTime, setRecordingTime] = useState(0);
   const [completedTests, setCompletedTests] = useState<string[]>([]);
   const [wsConnected, setWsConnected] = useState(false);
+  const [sessionIdsByTest, setSessionIdsByTest] = useState<Record<string, string>>({});
+  const [lastCompletedSessionId, setLastCompletedSessionId] = useState<string | null>(null);
 
   const totalTests = selectedTests.length;
   const currentTestId = selectedTests[currentTestIndex];
@@ -137,15 +153,101 @@ const VideoRecording = () => {
   const rafRef = useRef<number | null>(null);
   const lastSentRef = useRef<number>(0);
   const sequenceFramesRef = useRef<number[][]>([]);
+  const currentSessionIdRef = useRef<string | null>(null);
+  const wsFinalizeRef = useRef<{ resolve: () => void; timerId: number } | null>(null);
   const sendFps = 15; // throttle frame sends
 
+  const rememberSessionForCurrentTest = useCallback((nextSessionId: string | null | undefined) => {
+    if (!currentTestId || !nextSessionId) {
+      return;
+    }
+    currentSessionIdRef.current = nextSessionId;
+    setLastCompletedSessionId(nextSessionId);
+    setSessionIdsByTest((prev) =>
+      prev[currentTestId] === nextSessionId ? prev : { ...prev, [currentTestId]: nextSessionId }
+    );
+  }, [currentTestId]);
+
+  const forceCloseWs = useCallback(() => {
+    const ws = wsRef.current;
+    if (!ws) {
+      setWsConnected(false);
+      return;
+    }
+
+    ws.onopen = null;
+    ws.onmessage = null;
+    ws.onclose = null;
+    ws.onerror = null;
+    wsRef.current = null;
+    setWsConnected(false);
+
+    try {
+      ws.close();
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const resolveWsFinalize = useCallback(() => {
+    const pending = wsFinalizeRef.current;
+    if (!pending) {
+      return;
+    }
+    wsFinalizeRef.current = null;
+    window.clearTimeout(pending.timerId);
+    pending.resolve();
+    window.setTimeout(() => {
+      forceCloseWs();
+    }, 100);
+  }, [forceCloseWs]);
+
+  const beginWsFinalize = useCallback((): Promise<void> => {
+    const ws = wsRef.current;
+    if (!ws) {
+      return Promise.resolve();
+    }
+
+    if (wsFinalizeRef.current) {
+      return Promise.resolve();
+    }
+
+    return new Promise<void>((resolve) => {
+      const timerId = window.setTimeout(() => {
+        if (!wsFinalizeRef.current) {
+          resolve();
+          return;
+        }
+        wsFinalizeRef.current = null;
+        forceCloseWs();
+        resolve();
+      }, 2000);
+
+      wsFinalizeRef.current = { resolve, timerId };
+
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "end" }));
+      } else {
+        window.clearTimeout(timerId);
+        wsFinalizeRef.current = null;
+        forceCloseWs();
+        resolve();
+      }
+    });
+  }, [forceCloseWs, resolveWsFinalize]);
+
+  const summaryRouteTarget = currentTestId
+    ? sessionIdsByTest[currentTestId] || lastCompletedSessionId || testId
+    : lastCompletedSessionId || testId;
+
   const extractFrameFeatures = (msg: WSKeypointsMessage): number[] | null => {
-    if (msg?.model !== "hands" || !Array.isArray(msg?.hands) || msg.hands.length === 0) {
+    if (msg?.model !== "hands" || !Array.isArray(msg?.detections)) {
       return null;
     }
 
-    const landmarks = msg.hands[0]?.landmarks;
-    if (!Array.isArray(landmarks) || landmarks.length < 21) {
+    const primaryHand = primaryDetection(msg as KeypointPayload, 'hand');
+    const landmarks = primaryHand?.landmarks;
+    if (!Array.isArray(landmarks) || landmarks.length < EXPECTED_LANDMARKS.hands) {
       return null;
     }
 
@@ -181,7 +283,7 @@ const VideoRecording = () => {
       stopFrameLoop();
 
       if (wsRef.current) {
-        wsEndAndClose(recordingRef.current);
+        forceCloseWs();
       }
 
       if (mediaRecorderRef.current) {
@@ -237,7 +339,6 @@ const VideoRecording = () => {
           type: "init",
           patientId: id,
           testType: currentTest?.id,
-          testId: testId,
           model: modelForTest(currentTest?.id),
           fps: sendFps,
         })
@@ -247,12 +348,54 @@ const VideoRecording = () => {
 
     ws.onmessage = (ev) => {
       try {
-        const msg = JSON.parse(ev.data);
+        const msg = JSON.parse(ev.data) as WsEventMessage;
         if (msg.type === "keypoints") {
           drawKeypoints(msg);
           const frameFeatures = extractFrameFeatures(msg);
           if (frameFeatures) {
             sequenceFramesRef.current.push(frameFeatures);
+          }
+          return;
+        }
+
+        if (msg.type === "status" && msg.status === "initialized") {
+          rememberSessionForCurrentTest(msg.sessionId);
+          return;
+        }
+
+        if (msg.type === "dtw_saved") {
+          rememberSessionForCurrentTest(msg.sessionId);
+          return;
+        }
+
+        if (msg.type === "complete") {
+          rememberSessionForCurrentTest(msg.sessionId);
+          toast({
+            title: "Recording Saved",
+            description: msg.recording ? `Saved as ${msg.recording}` : "Recording completed successfully.",
+          });
+          resolveWsFinalize();
+          return;
+        }
+
+        if (msg.type === "dtw_error") {
+          toast({
+            title: "DTW Save Error",
+            description: msg.message || "Failed to save DTW artifacts.",
+            variant: "destructive",
+          });
+          resolveWsFinalize();
+          return;
+        }
+
+        if (msg.type === "error") {
+          if (msg.where === "end" || msg.where === "save_mp4") {
+            toast({
+              title: "Recording Finalization Error",
+              description: msg.message || "Failed to finalize recording.",
+              variant: "destructive",
+            });
+            resolveWsFinalize();
           }
         }
       } catch {
@@ -264,6 +407,12 @@ const VideoRecording = () => {
       setWsConnected(false);
       stopFrameLoop();
       wsRef.current = null;
+      if (wsFinalizeRef.current) {
+        const pending = wsFinalizeRef.current;
+        wsFinalizeRef.current = null;
+        window.clearTimeout(pending.timerId);
+        pending.resolve();
+      }
     };
     ws.onerror = () => {
       setWsConnected(false);
@@ -276,31 +425,6 @@ const VideoRecording = () => {
     if (wsRef.current?.readyState === 1) {
       wsRef.current.send(JSON.stringify({ type: "pause", paused }));
     }
-  };
-
-  const wsEndAndClose = (sendEnd: boolean = true) => {
-    const ws = wsRef.current;
-    if (!ws) return;
-
-    if (sendEnd && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: "end" }));
-    }
-
-    ws.onopen = null;
-    ws.onmessage = null;
-    ws.onclose = null;
-    ws.onerror = null;
-    wsRef.current = null;
-    setWsConnected(false);
-
-    const delay = sendEnd ? 150 : 0;
-    setTimeout(() => {
-      try {
-        ws.close();
-      } catch {
-        /* ignore */
-      }
-    }, delay);
   };
 
   // ---- Frame push loop ----
@@ -371,23 +495,18 @@ const VideoRecording = () => {
       ctx.lineTo(x2, y2);
       ctx.stroke();
     };
-    const toPx = (p: { x: number; y: number }) => ({
+    const toPx = (p: Pick<KeypointLandmark, 'x' | 'y'>) => ({
       x: p.x * (overlay.width / dpr),
       y: p.y * (overlay.height / dpr),
     });
 
-    if (msg.model === "hands" && Array.isArray(msg.hands)) {
-      const chains = [
-        [0, 1, 2, 3, 4],
-        [0, 5, 6, 7, 8],
-        [0, 9, 10, 11, 12],
-        [0, 13, 14, 15, 16],
-        [0, 17, 18, 19, 20],
-      ];
-      for (const hand of msg.hands as { landmarks: MPHandPoint[] }[]) {
+    if (msg.model === "hands" && Array.isArray(msg.detections)) {
+      for (const hand of msg.detections.filter(
+        (detection): detection is KeypointDetection => detection.kind === 'hand'
+      )) {
         const pts = hand.landmarks;
         ctx.lineWidth = 2;
-        for (const ch of chains) {
+        for (const ch of HAND_CONNECTION_CHAINS) {
           for (let i = 0; i < ch.length - 1; i++) {
             const a = toPx(pts[ch[i]]),
               b = toPx(pts[ch[i + 1]]);
@@ -401,35 +520,21 @@ const VideoRecording = () => {
       }
     }
 
-    if (msg.model === "pose" && Array.isArray(msg.pose)) {
-      const pts = msg.pose as MPPosePoint[];
+    if (msg.model === "pose" && Array.isArray(msg.detections)) {
+      const pts = primaryDetection(msg as KeypointPayload, 'pose')?.landmarks ?? [];
       for (const p of pts) {
-        if (p.v !== undefined && p.v < 0.5) continue;
+        if (p.visibility !== undefined && p.visibility < 0.5) continue;
         const { x, y } = toPx(p);
         dot(x, y);
       }
-      const pairs = [
-        [11, 12],
-        [11, 13],
-        [13, 15],
-        [12, 14],
-        [14, 16],
-        [11, 23],
-        [12, 24],
-        [23, 24],
-        [23, 25],
-        [24, 26],
-        [25, 27],
-        [26, 28],
-      ];
       ctx.lineWidth = 2;
-      for (const [i, j] of pairs) {
+      for (const [i, j] of POSE_CONNECTIONS) {
         const a = pts[i],
           b = pts[j];
         if (!a || !b) continue;
         if (
-          (a.v !== undefined && a.v < 0.5) ||
-          (b.v !== undefined && b.v < 0.5)
+          (a.visibility !== undefined && a.visibility < 0.5) ||
+          (b.visibility !== undefined && b.visibility < 0.5)
         )
           continue;
         const ap = toPx(a),
@@ -462,8 +567,10 @@ const VideoRecording = () => {
     }
 
     if (wsRef.current) {
-      wsEndAndClose(false);
+      forceCloseWs();
     }
+
+    currentSessionIdRef.current = null;
 
     setIsRecording(true);
     setIsPaused(false);
@@ -513,7 +620,7 @@ const VideoRecording = () => {
 
     const activeTestId = currentTestId || currentTest?.id || "";
 
-    wsEndAndClose();
+    const wsFinalize = beginWsFinalize();
     stopFrameLoop();
 
     return new Promise<void>((resolve) => {
@@ -524,38 +631,9 @@ const VideoRecording = () => {
         recordingRef.current = false;
         mediaRecorderRef.current = null;
 
-        const chunks = [...recordedChunks.current];
         recordedChunks.current = [];
-        const blob = new Blob(chunks, { type: "video/webm" });
-        const formData = new FormData();
-        formData.append("patient_id", id || "");
-        formData.append("test_name", activeTestId || "unknown");
-        formData.append("video", blob, "recording.webm");
 
-        try {
-          const response = await uploadVideo(formData);
-          if (response.success && response.data) {
-            const data = response.data;
-            const diskHint = data?.disk_path
-              ? data.disk_path
-              : data?.filename
-              ? `backend/recordings/${data.filename}`
-              : undefined;
-            toast({
-              title: "Recording Saved",
-              description: diskHint ? `Saved to ${diskHint}` : `Saved as ${data.filename}`,
-            });
-          } else {
-            throw new Error(response.error || "Upload failed");
-          }
-        } catch (err) {
-          console.error("Upload error:", err);
-          toast({
-            title: "Upload Error",
-            description: "Could not upload the video.",
-            variant: "destructive",
-          });
-        }
+        await wsFinalize;
 
         sequenceFramesRef.current = [];
 
@@ -590,7 +668,7 @@ const VideoRecording = () => {
     setIsPaused(false);
     recordingRef.current = false;
     stopFrameLoop();
-    wsEndAndClose(false);
+    forceCloseWs();
     recordedChunks.current = [];
     if (currentTestIndex < selectedTests.length - 1) {
       setCurrentTestIndex((prev) => prev + 1);
@@ -606,7 +684,7 @@ const VideoRecording = () => {
   void ensureCameraStream();
     } else {
       releaseCameraStream();
-      navigate(`/patients/${id}/video-summary/${testId}`);
+      navigate(`/patients/${id}/video-summary/${summaryRouteTarget}`);
     }
   };
 
@@ -627,6 +705,15 @@ const VideoRecording = () => {
     setRecordingTime(0);
     setIsPaused(false);
     recordingRef.current = false;
+    setSessionIdsByTest((prev) => {
+      if (!currentTestId || !prev[currentTestId]) {
+        return prev;
+      }
+      const next = { ...prev };
+      delete next[currentTestId];
+      return next;
+    });
+    currentSessionIdRef.current = null;
     const ctx = overlayRef.current?.getContext("2d");
     if (ctx && overlayRef.current) {
       ctx.clearRect(0, 0, overlayRef.current.width, overlayRef.current.height);
@@ -660,7 +747,11 @@ const VideoRecording = () => {
     setIsPaused(false);
     setRecordingTime(0);
     recordingRef.current = false;
-    wsEndAndClose();
+    if (wsFinalizeRef.current) {
+      window.clearTimeout(wsFinalizeRef.current.timerId);
+      wsFinalizeRef.current = null;
+    }
+    forceCloseWs();
     stopFrameLoop();
     const ctx = overlayRef.current?.getContext("2d");
     if (ctx && overlayRef.current)
@@ -1000,7 +1091,7 @@ const VideoRecording = () => {
                       ) : (
                         <Button
                           onClick={() =>
-                            navigate(`/patients/${id}/video-summary/${testId}`)
+                            navigate(`/patients/${id}/video-summary/${summaryRouteTarget}`)
                           }
                           className="bg-primary hover:bg-primary-hover"
                         >
