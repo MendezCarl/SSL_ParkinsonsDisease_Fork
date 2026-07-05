@@ -79,7 +79,7 @@ class LSTMCNNInferenceService:
                 "Place the training checkpoint at that path to run inference."
             )
 
-        checkpoint = torch.load(self.checkpoint_path, map_location=self.device)
+        checkpoint = torch.load(self.checkpoint_path, map_location=self.device, weights_only=True)
         state_dict = checkpoint["model_state_dict"] if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint else checkpoint
 
         model = MILClassifier(input_size=N_FEATURES, embed_dim=64, n_classes=N_CLASSES).to(self.device)

@@ -186,6 +186,19 @@ def test_phase6_upload_video_and_history_flow(monkeypatch, tmp_path):
         client.delete(f"/patients/{patient_id}")
 
 
+def test_phase6_recording_endpoint_rejects_invalid_filename(monkeypatch, tmp_path):
+    recordings_dir = tmp_path / "recordings"
+    recordings_dir.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(main, "RECORDINGS_DIR", recordings_dir)
+    monkeypatch.setattr(recording_service, "RECORDINGS_DIR", recordings_dir)
+
+    client = TestClient(app)
+    response = client.get("/recordings/%2E%2E.mp4")
+
+    assert response.status_code == 404
+
+
 def test_phase6_websocket_recording_flow(monkeypatch, tmp_path):
     recordings_dir = tmp_path / "recordings"
     recordings_dir.mkdir(parents=True, exist_ok=True)

@@ -2,6 +2,7 @@
 import os
 import json
 import base64
+import re
 from io import BytesIO
 import numpy as np
 import matplotlib.pyplot as plt
@@ -29,6 +30,7 @@ templates = Jinja2Templates(directory="templates")
 # Directories used by finger_tapping.py
 VIDEO_DIR = "recordings"
 JSON_DIR = "jsons"
+RECORDING_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 os.makedirs(VIDEO_DIR, exist_ok=True)
 os.makedirs(JSON_DIR, exist_ok=True)
@@ -167,7 +169,12 @@ async def get_recording_details(request: Request, recording_name: str):
 
 @app.get("/video/{recording_name}")
 async def get_video(recording_name: str):
-    video_path = os.path.join(VIDEO_DIR, f"{recording_name}.avi")
+    if not RECORDING_NAME_RE.fullmatch(recording_name):
+        return {"error": "Video not found"}
+    base_dir = os.path.realpath(VIDEO_DIR)
+    video_path = os.path.realpath(os.path.join(base_dir, f"{recording_name}.avi"))
+    if not video_path.startswith(base_dir + os.sep):
+        return {"error": "Video not found"}
     if os.path.exists(video_path):
         return FileResponse(video_path, media_type="video/x-msvideo")
     return {"error": "Video not found"}

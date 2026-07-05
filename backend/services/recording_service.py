@@ -52,6 +52,10 @@ def _safe_recording_path(filename: str) -> Path:
     return candidate
 
 
+def resolve_recording_path(filename: str) -> Path:
+    return _safe_recording_path(filename)
+
+
 def build_recording_filename(
     *,
     patient_id: str | None,
