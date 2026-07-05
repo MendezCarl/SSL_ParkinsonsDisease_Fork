@@ -59,13 +59,15 @@ def build_recording_filename(
     session_id: str | None = None,
     extension: str,
 ) -> str:
-    patient_token = _safe_token(patient_id, "unknown")
-    test_token = _safe_token(test_name, "unknown")
-    session_token = _safe_token(session_id, datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S"))
+    # File paths should not depend on user-controlled patient/test identifiers.
+    # Record linkage lives in test history and DTW metadata, not the filename itself.
+    _ = patient_id, test_name, session_id
+    timestamp_token = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+    unique_token = uuid4().hex[:12]
     ext = (extension if extension.startswith(".") else f".{extension}").lower()
     if ext not in _ALLOWED_RECORDING_EXTENSIONS:
         raise ValueError(f"Unsupported recording extension: {ext}")
-    return _validate_recording_filename(f"{patient_token}_{test_token}_{session_token}{ext}")
+    return _validate_recording_filename(f"recording_{timestamp_token}_{unique_token}{ext}")
 
 
 def save_frames_to_mp4(
