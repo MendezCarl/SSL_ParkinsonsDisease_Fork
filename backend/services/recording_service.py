@@ -26,6 +26,20 @@ def _safe_token(value: str | None, fallback: str) -> str:
     return sanitized or fallback
 
 
+def _safe_recording_path(filename: str) -> Path:
+    candidate_name = Path(filename).name
+    if candidate_name != filename:
+        raise ValueError("Invalid recording filename")
+
+    base_resolved = RECORDINGS_DIR.resolve(strict=False)
+    candidate = (RECORDINGS_DIR / candidate_name).resolve(strict=False)
+    try:
+        candidate.relative_to(base_resolved)
+    except ValueError as exc:
+        raise ValueError("Invalid recording path") from exc
+    return candidate
+
+
 def build_recording_filename(
     *,
     patient_id: str | None,
@@ -59,7 +73,7 @@ def save_frames_to_mp4(
         session_id=session_id or uuid4().hex,
         extension=".mp4",
     )
-    path = RECORDINGS_DIR / filename
+    path = _safe_recording_path(filename)
 
     for fourcc_str in ("avc1", "H264", "mp4v"):
         fourcc = cv2.VideoWriter_fourcc(*fourcc_str)
@@ -105,7 +119,7 @@ def save_uploaded_video(
         session_id=session_id,
         extension=extension,
     )
-    filepath = RECORDINGS_DIR / filename
+    filepath = _safe_recording_path(filename)
     with open(filepath, "wb") as buffer:
         shutil.copyfileobj(upload_file, buffer)
     return filename

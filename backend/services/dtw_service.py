@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,13 +10,14 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 from fastapi import HTTPException
 
-from routes.utils_dtw import EndOnlyDTW, generate_session_id, normalize_test_name
+from routes.utils_dtw import ALLOWED_TESTS, EndOnlyDTW, generate_session_id, normalize_test_name
 from services import patient_service
 from services.test_history_service import get_patient_tests as load_patient_tests
 from storage_paths import DTW_RUNS_DIR, LABELLED_TRAINING_DATA_DIR
 
 
 DTW_BASE = DTW_RUNS_DIR
+_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
 
 def _normalize_patient_id(patient_id: str | None) -> str:
@@ -84,6 +86,16 @@ def _downsample_xy(x: np.ndarray, y: np.ndarray, max_points: int) -> Tuple[List[
         return x.astype(int).tolist(), y.astype(float).tolist()
     step = max(1, total // max_points)
     return x[::step].astype(int).tolist(), y[::step].astype(float).tolist()
+
+
+def _safe_path_join(base_dir: Path, *parts: str) -> Path:
+    base_resolved = base_dir.resolve(strict=False)
+    candidate = base_dir.joinpath(*parts).resolve(strict=False)
+    try:
+        candidate.relative_to(base_resolved)
+    except ValueError as exc:
+        raise HTTPException(400, "Invalid storage path") from exc
+    return candidate
 
 
 class DtwService:
@@ -401,8 +413,9 @@ class DtwService:
         notes: str | None,
     ) -> Dict[str, Any]:
         session_dir, meta = self._resolve_session_dir_and_meta(test_name, session_id)
-        meta_path = session_dir / "meta.json"
+        meta_path = _safe_path_join(session_dir, "meta.json")
         canonical_session_id = self._canonical_session_id(session_dir, meta)
+        canonical_test_name = self._canonical_test_name(test_name)
 
         meta["doctor_confirmed_stage"] = confirmed_stage
         meta["doctor_label_utc"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -414,10 +427,15 @@ class DtwService:
         meta["label_source"] = "doctor_correction" if was_corrected else "doctor_confirmed"
         meta_path.write_text(json.dumps(meta, indent=2))
 
-        training_dir = LABELLED_TRAINING_DATA_DIR / test_name / f"stage_{confirmed_stage}" / canonical_session_id
+        training_dir = _safe_path_join(
+            LABELLED_TRAINING_DATA_DIR,
+            canonical_test_name,
+            f"stage_{confirmed_stage}",
+            canonical_session_id,
+        )
         training_dir.mkdir(parents=True, exist_ok=True)
         for src in session_dir.iterdir():
-            dst = training_dir / src.name
+            dst = _safe_path_join(training_dir, src.name)
             if not dst.exists():
                 shutil.copy2(src, dst)
 
@@ -440,7 +458,7 @@ class DtwService:
                     "label_source": meta["label_source"],
                     "training_copy": str(training_dir),
                     "patient_updated": False,
-                    "patient_update_error": str(exc),
+                    "patient_update_error": "Failed to update patient severity",
                 }
 
         return {
@@ -453,21 +471,34 @@ class DtwService:
         }
 
     def _test_dir(self, test_name: str) -> Path:
-        test_dir = DTW_BASE / test_name
+        canonical_test_name = self._canonical_test_name(test_name)
+        test_dir = _safe_path_join(DTW_BASE, canonical_test_name)
         if not test_dir.is_dir():
-            raise HTTPException(404, f"Unknown test '{test_name}' at {test_dir}")
+            raise HTTPException(404, f"Unknown test '{canonical_test_name}'")
         return test_dir
+
+    def _canonical_test_name(self, test_name: str | None) -> str:
+        canonical_test_name = normalize_test_name(test_name)
+        if canonical_test_name not in ALLOWED_TESTS:
+            raise HTTPException(404, "Unknown test")
+        return canonical_test_name
+
+    def _validated_session_id(self, session_id: str | None) -> str:
+        candidate = (session_id or "").strip()
+        if not _SESSION_ID_RE.fullmatch(candidate):
+            raise HTTPException(400, "Invalid session id")
+        return candidate
 
     def _canonical_session_id(self, session_dir: Path, meta: Dict[str, Any]) -> str:
         return str(meta.get("session_id") or session_dir.name)
 
     def _read_meta(self, meta_path: Path) -> Dict[str, Any]:
         if not meta_path.is_file():
-            raise HTTPException(404, f"Missing metadata at {meta_path}")
+            raise HTTPException(404, "Missing metadata")
         try:
             return json.loads(meta_path.read_text())
         except Exception as exc:
-            raise HTTPException(500, f"Failed to read {meta_path.name}: {exc}") from exc
+            raise HTTPException(500, "Failed to read metadata") from exc
 
     def _history_session_ids_for_patient(self, patient_id: str, test_name: str | None = None) -> set[str]:
         target_test_name = self.normalize_test_name(test_name) if test_name else ""
@@ -502,26 +533,27 @@ class DtwService:
 
     def _resolve_session_dir_and_meta(self, test_name: str, session_id: str) -> Tuple[Path, Dict[str, Any]]:
         root = self._test_dir(test_name)
+        validated_session_id = self._validated_session_id(session_id)
 
-        direct = root / session_id
+        direct = _safe_path_join(root, validated_session_id)
         if direct.is_dir():
-            return direct, self._read_meta(direct / "meta.json")
+            return direct, self._read_meta(_safe_path_join(direct, "meta.json"))
 
         for session_dir in root.iterdir():
             if not session_dir.is_dir():
                 continue
             try:
-                meta = self._read_meta(session_dir / "meta.json")
+                meta = self._read_meta(_safe_path_join(session_dir, "meta.json"))
             except HTTPException:
                 continue
-            if self._canonical_session_id(session_dir, meta) == session_id:
+            if self._canonical_session_id(session_dir, meta) == validated_session_id:
                 return session_dir, meta
 
-        raise HTTPException(404, f"Session '{session_id}' not found under {root}")
+        raise HTTPException(404, "Session not found")
 
     def _load_session_artifacts(self, test_name: str, session_id: str) -> Tuple[Path, Any, Dict[str, Any]]:
         session_dir, meta = self._resolve_session_dir_and_meta(test_name, session_id)
-        npz_path = session_dir / "dtw_artifacts.npz"
+        npz_path = _safe_path_join(session_dir, "dtw_artifacts.npz")
         if not npz_path.is_file():
             raise HTTPException(404, "Artifacts missing")
 
