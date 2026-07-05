@@ -42,7 +42,7 @@ async def create_patient(patient: PatientCreate):
         detail = result.get("errors") if result and isinstance(result.get("errors"), dict) and result.get("errors") else None
         if detail is not None:
             raise HTTPException(status_code=422, detail=detail)
-        logger.warning("Create patient failed: %s", result)
+        logger.warning("Create patient failed")
         raise HTTPException(status_code=400, detail="Failed to create patient")
 
     return result

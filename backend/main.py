@@ -504,20 +504,22 @@ def list_videos(patient_id: str, test_name: str):
 
 @app.get("/recordings/{filename}", response_class=FileResponse)
 def get_recording_file(filename: str):
-    try:
-        file_path = resolve_recording_path(filename)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail="Video not found") from exc
-    if not file_path.exists():
+    base_dir = os.path.realpath(str(RECORDINGS_DIR))
+    file_path = os.path.realpath(os.path.join(base_dir, filename))
+    if os.path.basename(file_path) != filename:
         raise HTTPException(status_code=404, detail="Video not found")
-    suffix = file_path.suffix.lower()
+    if not file_path.startswith(base_dir + os.sep):
+        raise HTTPException(status_code=404, detail="Video not found")
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Video not found")
+    suffix = os.path.splitext(file_path)[1].lower()
     if suffix == ".webm":
         media_type = "video/webm"
     elif suffix == ".mov":
         media_type = "video/quicktime"
     else:
         media_type = "video/mp4"
-    return FileResponse(str(file_path), media_type=media_type)
+    return FileResponse(file_path, media_type=media_type)
 
 # ============ Uvicorn ============
 if __name__ == "__main__":
