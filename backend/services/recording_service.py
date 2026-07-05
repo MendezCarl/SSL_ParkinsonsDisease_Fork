@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,6 +10,10 @@ from uuid import uuid4
 import numpy as np
 
 from storage_paths import RECORDINGS_DIR
+
+
+_ALLOWED_RECORDING_EXTENSIONS = {".mp4", ".mov", ".webm", ".avi", ".mkv"}
+_RECORDING_FILENAME_RE = re.compile(r"^[a-z0-9_-]+\.(mp4|mov|webm|avi|mkv)$")
 
 
 def _cv2():
@@ -26,10 +31,17 @@ def _safe_token(value: str | None, fallback: str) -> str:
     return sanitized or fallback
 
 
-def _safe_recording_path(filename: str) -> Path:
-    candidate_name = Path(filename).name
-    if candidate_name != filename:
+def _validate_recording_filename(filename: str) -> str:
+    candidate_name = Path(filename).name.lower()
+    if candidate_name != filename.lower():
         raise ValueError("Invalid recording filename")
+    if not _RECORDING_FILENAME_RE.fullmatch(candidate_name):
+        raise ValueError("Invalid recording filename")
+    return candidate_name
+
+
+def _safe_recording_path(filename: str) -> Path:
+    candidate_name = _validate_recording_filename(filename)
 
     base_resolved = RECORDINGS_DIR.resolve(strict=False)
     candidate = (RECORDINGS_DIR / candidate_name).resolve(strict=False)
@@ -50,8 +62,10 @@ def build_recording_filename(
     patient_token = _safe_token(patient_id, "unknown")
     test_token = _safe_token(test_name, "unknown")
     session_token = _safe_token(session_id, datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S"))
-    ext = extension if extension.startswith(".") else f".{extension}"
-    return f"{patient_token}_{test_token}_{session_token}{ext}"
+    ext = (extension if extension.startswith(".") else f".{extension}").lower()
+    if ext not in _ALLOWED_RECORDING_EXTENSIONS:
+        raise ValueError(f"Unsupported recording extension: {ext}")
+    return _validate_recording_filename(f"{patient_token}_{test_token}_{session_token}{ext}")
 
 
 def save_frames_to_mp4(
@@ -91,7 +105,7 @@ def save_frames_to_mp4(
 
 def _pick_upload_extension(filename: str | None, content_type: str | None) -> str:
     suffix = Path(filename or "").suffix.lower()
-    if suffix in {".mp4", ".mov", ".webm", ".avi", ".mkv"}:
+    if suffix in _ALLOWED_RECORDING_EXTENSIONS:
         return suffix
 
     content_map = {
