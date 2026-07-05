@@ -508,6 +508,25 @@ const VideoSummary = () => {
     [sortedHistory, testId, testKey]
   );
 
+  const storedDtwMetrics = useMemo<DtwSeriesMetrics | null>(() => {
+    if (!currentTest?.analysis?.dtwMetrics) return null;
+    return {
+      ok: true,
+      ...currentTest.analysis.dtwMetrics,
+    };
+  }, [currentTest?.analysis?.dtwMetrics]);
+
+  const storedMlPrediction = useMemo<MlPrediction | null>(() => {
+    const prediction = currentTest?.analysis?.mlPrediction;
+    if (!prediction) return null;
+    return {
+      predicted_updrs_stage: prediction.predicted_updrs_stage,
+      probabilities: prediction.probabilities,
+      severity: prediction.severity,
+      confidence: prediction.confidence,
+    };
+  }, [currentTest?.analysis?.mlPrediction]);
+
   const filteredHistory = useMemo(
     () =>
       sortedHistory.filter(
@@ -676,7 +695,7 @@ const VideoSummary = () => {
   // Fetch KPI metrics (distance, avg step cost, similarity) from /series
   useEffect(() => {
     if (!testKey || !sessionId) {
-      setMetrics(null);
+      setMetrics(storedDtwMetrics);
       setMetricsErr(null);
       return;
     }
@@ -684,22 +703,23 @@ const VideoSummary = () => {
     (async () => {
       setMetricsLoading(true);
       setMetricsErr(null);
+      setMetrics(storedDtwMetrics);
       const response = await getDtwSeries(testKey, sessionId, 200, ctrl.signal);
       if (response.success && response.data) {
         setMetrics(response.data as DtwSeriesMetrics);
       } else {
-        setMetrics(null);
-        setMetricsErr(response.error || "Failed to load DTW metrics");
+        setMetrics(storedDtwMetrics);
+        setMetricsErr(storedDtwMetrics ? null : response.error || "Failed to load DTW metrics");
       }
       setMetricsLoading(false);
     })();
     return () => ctrl.abort();
-  }, [testKey, sessionId]);
+  }, [testKey, sessionId, storedDtwMetrics]);
 
   // Fetch ML UPDRS stage prediction from saved DTW session
   useEffect(() => {
     if (!testKey || !sessionId) {
-      setMlPrediction(null);
+      setMlPrediction(storedMlPrediction);
       setMlErr(null);
       return;
     }
@@ -707,17 +727,18 @@ const VideoSummary = () => {
     (async () => {
       setMlLoading(true);
       setMlErr(null);
+      setMlPrediction(storedMlPrediction);
       const response = await getMlPredictionFromSession(testKey, sessionId, ctrl.signal);
       if (response.success && response.data) {
         setMlPrediction(response.data);
       } else {
-        setMlPrediction(null);
-        setMlErr(response.error || "ML prediction unavailable");
+        setMlPrediction(storedMlPrediction);
+        setMlErr(storedMlPrediction ? null : response.error || "ML prediction unavailable");
       }
       setMlLoading(false);
     })();
     return () => ctrl.abort();
-  }, [testKey, sessionId]);
+  }, [testKey, sessionId, storedMlPrediction]);
 
   const onExport = async () => {
     if (!testKey || !sessionId) return;

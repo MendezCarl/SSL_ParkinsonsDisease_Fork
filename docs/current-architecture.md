@@ -4,13 +4,12 @@ This document describes how the application works today after the backend refact
 
 ## High-Level Shape
 
-The application is intentionally split across three persistence styles:
+The application is intentionally split across two persistence styles:
 
 1. SQLite for relational application data
-2. JSON for lightweight patient test-history timeline data
-3. Filesystem storage for recordings, DTW artifacts, templates, and other generated assets
+2. Filesystem storage for recordings, DTW artifacts, templates, and other generated assets
 
-That split is deliberate. The project has evolved from a demo/prototype codebase, and the refactor work prioritized stabilizing the running behavior without forcing a risky all-at-once migration into one storage model.
+That split is deliberate. The project has evolved from a demo/prototype codebase, and the refactor work now keeps structured runtime metadata in SQLite while leaving heavy artifact data on disk.
 
 ## Active Runtime Areas
 
@@ -21,7 +20,7 @@ Important paths:
 - `backend/data/app.db`
   - authoritative runtime SQLite database
 - `backend/data/test_history.json`
-  - authoritative patient timeline/test-history feed for the current app
+  - legacy import/backfill source retained for migration and audit work
 - `backend/data/dtw_runs/`
   - DTW artifacts and `meta.json` files per test/session
 - `backend/data/recordings/`
@@ -50,13 +49,13 @@ Active backend layers now look roughly like this:
 - `backend/services/recording_service.py`
   - recording persistence and filename generation
 - `backend/services/test_history_service.py`
-  - test-history entry construction and append/load helpers
+  - test-history entry construction, SQLite-backed append/load helpers, and persisted analysis snapshots per session
 - `backend/services/dtw_service.py`
   - DTW session lookup, patient scoping, artifact reads, legacy alias handling, doctor label persistence
 - `backend/services/dtw_migration_service.py`
   - historical DTW folder normalization and test-history backfill
 - `backend/patient_manager.py`
-  - still active for database bootstrap, patient persistence orchestration, validation, CSV import core logic, and JSON-backed test-history manager
+  - still active for database bootstrap, patient persistence orchestration, validation, CSV import core logic, additive schema bootstrap helpers, and SQLite foreign-key enforcement/repair
 
 ## Why The Storage Model Is Still Split
 
@@ -71,15 +70,17 @@ SQLite is the right fit for:
 
 These entities are relational, queryable, and naturally fit the current SQLAlchemy model.
 
-### Test history remains JSON-backed
+### Test history now lives in SQLite
 
-`backend/data/test_history.json` remains active because:
+The patient-facing `/patients/{id}/tests` feed now reads and writes through `testresults` in SQLite.
 
-- the historical app flow already relied on it
-- moving it into SQL during the refactor would have introduced extra migration risk
-- the refactor goal was to normalize contracts and ownership before replacing storage
+- The table stores core fields such as test date, recording filename, frame count, session id, and FPS directly.
+- DTW summary payloads and compatibility metadata stay in JSON columns on the same row.
+- Revisit-safe DTW metrics and ML prediction snapshots are persisted on the test row so prior results can render without recomputing everything successfully every time.
+- This keeps runtime test metadata relational without forcing a larger normalization pass for DTW-specific details.
+- Foreign-key enforcement is enabled, so test history cannot be written for a patient row that does not exist.
 
-This means patient history is currently timeline-oriented and lightweight, while DTW detail still lives in the DTW artifact store.
+The legacy `test_history.json` file is no longer authoritative runtime data.
 
 ### DTW artifacts remain file-based
 

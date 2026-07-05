@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from typing import List, Dict, Optional
 
-from sqlalchemy import String, Integer, DateTime, Text, ForeignKey, create_engine, event, func, Index, Date
+from sqlalchemy import Boolean, String, Integer, DateTime, Text, ForeignKey, create_engine, event, func, Index, Date
 
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 from sqlalchemy.types import JSON
@@ -78,12 +78,23 @@ class DoctorNote(Base):
 
 class TestResult(Base):
     __tablename__ = "testresults"
+    __table_args__ = (
+        Index("ix_testresults_patient_date", "patient_id", "test_date"),
+        Index("ix_testresults_patient_name", "patient_id", "test_name"),
+        Index("ix_testresults_session_id", "session_id"),
+    )
+
     test_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     patient_id: Mapped[str] = mapped_column(ForeignKey("patients.patient_id", ondelete="CASCADE"), nullable=False, index=True)
     test_name: Mapped[Optional[str]] = mapped_column(String(100))
     test_date: Mapped[Optional[datetime]] = mapped_column(DateTime)
     recording_file: Mapped[Optional[str]] = mapped_column(String(512))
     frame_count: Mapped[Optional[int]] = mapped_column(Integer)
+    session_id: Mapped[Optional[str]] = mapped_column(String(64))
+    fps: Mapped[Optional[int]] = mapped_column(Integer)
+    summary_available: Mapped[Optional[bool]] = mapped_column(Boolean)
+    dtw: Mapped[Optional[Dict]] = mapped_column(JSON)
+    extra: Mapped[Optional[Dict]] = mapped_column(JSON)
     patient: Mapped["Patient"] = relationship(back_populates="testresults")
 
 # SQLite FK enforcement
@@ -114,7 +125,6 @@ if __name__ == "__main__":
         s.add_all([u, p])
         s.commit()
         # s.query(Patient).filter_by(user_id=u.id).all()
-
 
 
 

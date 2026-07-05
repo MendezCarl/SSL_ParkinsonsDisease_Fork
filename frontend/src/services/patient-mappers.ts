@@ -1,4 +1,4 @@
-import { AVAILABLE_TESTS, Patient, Test, TestIndicator, LabResultEntry, DoctorNoteEntry } from '@/types/patient';
+import { AVAILABLE_TESTS, Patient, Test, TestIndicator, LabResultEntry, DoctorNoteEntry, TestAnalysisSnapshot } from '@/types/patient';
 
 type TestType = Test['type'];
 type TestStatus = Test['status'];
@@ -106,6 +106,38 @@ interface BackendDtwMetrics {
   artifacts?: { dir?: string | null } | null;
 }
 
+interface BackendStoredDtwAnalysis {
+  session_id?: string | null;
+  distance_pos?: number | string | null;
+  distance_amp?: number | string | null;
+  distance_spd?: number | string | null;
+  avg_step_pos?: number | string | null;
+  avg_step_cost?: number | string | null;
+  similarity_overall?: number | string | null;
+  similarity_pos?: number | string | null;
+  similarity_amp?: number | string | null;
+  similarity_spd?: number | string | null;
+  distance?: number | string | null;
+  similarity?: number | string | null;
+}
+
+interface BackendStoredMlPrediction {
+  predicted_updrs_stage?: number | null;
+  probabilities?: Record<string, number> | null;
+  severity?: string | null;
+  severity_stage?: number | null;
+  prediction?: string | null;
+  confidence?: number | null;
+  model_version?: string | null;
+  preprocessing_version?: string | null;
+  generated_at?: string | null;
+}
+
+interface BackendAnalysisSnapshot {
+  dtw_metrics?: BackendStoredDtwAnalysis | null;
+  ml_prediction?: BackendStoredMlPrediction | null;
+}
+
 export interface BackendTestEntry {
   id?: string | null;
   test_id?: string | null;
@@ -120,6 +152,7 @@ export interface BackendTestEntry {
   frame_count?: number | string | null;
   fps?: number | string | null;
   dtw?: BackendDtwMetrics | null;
+  analysis?: BackendAnalysisSnapshot | null;
   indicator?: BackendTestIndicator | null;
   patient_id?: string | null;
   model?: string | null;
@@ -280,6 +313,45 @@ const parseNumber = (value: number | string | null | undefined): number | null =
   return Number.isFinite(parsed) ? parsed : null;
 };
 
+const parseStoredAnalysis = (analysis?: BackendAnalysisSnapshot | null): TestAnalysisSnapshot | null => {
+  if (!analysis) return null;
+
+  const dtwMetrics = analysis.dtw_metrics
+    ? {
+        session_id: analysis.dtw_metrics.session_id ?? null,
+        distance_pos: parseNumber(analysis.dtw_metrics.distance_pos),
+        distance_amp: parseNumber(analysis.dtw_metrics.distance_amp),
+        distance_spd: parseNumber(analysis.dtw_metrics.distance_spd),
+        avg_step_pos: parseNumber(analysis.dtw_metrics.avg_step_pos),
+        avg_step_cost: parseNumber(analysis.dtw_metrics.avg_step_cost),
+        similarity_overall: parseNumber(analysis.dtw_metrics.similarity_overall),
+        similarity_pos: parseNumber(analysis.dtw_metrics.similarity_pos),
+        similarity_amp: parseNumber(analysis.dtw_metrics.similarity_amp),
+        similarity_spd: parseNumber(analysis.dtw_metrics.similarity_spd),
+        distance: parseNumber(analysis.dtw_metrics.distance),
+        similarity: parseNumber(analysis.dtw_metrics.similarity),
+      }
+    : null;
+
+  const rawPrediction = analysis.ml_prediction;
+  const mlPrediction = rawPrediction && rawPrediction.predicted_updrs_stage != null && rawPrediction.severity && rawPrediction.prediction
+    ? {
+        predicted_updrs_stage: rawPrediction.predicted_updrs_stage,
+        probabilities: rawPrediction.probabilities ?? {},
+        severity: rawPrediction.severity,
+        severity_stage: rawPrediction.severity_stage ?? rawPrediction.predicted_updrs_stage + 1,
+        prediction: rawPrediction.prediction,
+        confidence: rawPrediction.confidence ?? 0,
+        model_version: rawPrediction.model_version ?? null,
+        preprocessing_version: rawPrediction.preprocessing_version ?? null,
+        generated_at: rawPrediction.generated_at ?? null,
+      }
+    : null;
+
+  if (!dtwMetrics && !mlPrediction) return null;
+  return { dtwMetrics, mlPrediction };
+};
+
 export const convertBackendTestToFrontend = (patientId: string, entry: BackendTestEntry, apiBaseUrl: string = '/api'): Test => {
   const testType = resolveTestType(entry.test_name || entry.name || entry.display_name);
   if (testType === 'unknown') {
@@ -297,10 +369,16 @@ export const convertBackendTestToFrontend = (patientId: string, entry: BackendTe
   const testDate = toDate(entry.date);
 
   const dtwMetrics = entry.dtw || null;
-  const similarity = dtwMetrics ? parseNumber(dtwMetrics.similarity) : null;
-  const distance = dtwMetrics ? parseNumber(dtwMetrics.distance) : null;
+  const analysis = parseStoredAnalysis(entry.analysis);
+  const similarity = dtwMetrics ? parseNumber(dtwMetrics.similarity) : analysis?.dtwMetrics?.similarity ?? analysis?.dtwMetrics?.similarity_overall ?? null;
+  const distance = dtwMetrics ? parseNumber(dtwMetrics.distance) : analysis?.dtwMetrics?.distance ?? analysis?.dtwMetrics?.distance_pos ?? null;
   const rawId = entry.test_id || entry.id || entry.recording_file || `${testType}-${testDate.getTime()}`;
   const sanitizedId = String(rawId).replace(/\s+/g, '-');
+  const dtwSessionId =
+    (dtwMetrics && typeof dtwMetrics.session_id === 'string' ? dtwMetrics.session_id : null) ??
+    analysis?.dtwMetrics?.session_id ??
+    ((dtwMetrics || analysis) && entry.test_id ? String(entry.test_id) : null) ??
+    null;
 
   return {
     id: sanitizedId,
@@ -317,8 +395,9 @@ export const convertBackendTestToFrontend = (patientId: string, entry: BackendTe
     fps: parseNumber(entry.fps),
     similarity,
     distance,
-    dtwSessionId: dtwMetrics && typeof dtwMetrics.session_id === 'string' ? dtwMetrics.session_id : null,
+    dtwSessionId,
     indicator,
+    analysis,
     results: undefined,
   };
 };

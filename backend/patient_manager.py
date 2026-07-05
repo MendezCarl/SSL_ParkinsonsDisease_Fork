@@ -8,20 +8,18 @@ from datetime import datetime, date
 from io import StringIO
 from typing import Any, Dict, List, Optional, Union
 
-import json
 from datetime import datetime
 from sqlalchemy.orm import Session
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import sessionmaker, Session
 from fastapi import HTTPException as HttpException
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
-import threading
 import copy
 from uuid import uuid4
 
 # --- your models & repos ---
-from repo.sql_models import Base, Patient, LabResult, DoctorNote  # Visit, TestResult defined there as well
+from repo.sql_models import Base, User, Patient, LabResult, DoctorNote  # Visit, TestResult defined there as well
 from repo.patient_repository import PatientRepository
 from schema.patient_contracts import (
     PatientCreate, PatientUpdate,
@@ -29,11 +27,22 @@ from schema.patient_contracts import (
     PatientSearchResponse, FilterCriteria,
     LabResultOut, DoctorNoteOut, LabResultIn, DoctorNoteIn
 )
-from storage_paths import APP_DB_PATH, TEST_HISTORY_PATH
+from storage_paths import APP_DB_PATH
 
 # ----------------- DB bootstrap -----------------
 DB_URL = os.getenv("DB_URL", f"sqlite:///{APP_DB_PATH.as_posix()}")
+
+
+def _set_sqlite_pragma(dbapi_conn, _) -> None:
+    cur = dbapi_conn.cursor()
+    cur.execute("PRAGMA foreign_keys = ON;")
+    cur.close()
+
+
 engine = create_engine(DB_URL, future=True)
+if engine.url.get_backend_name() == "sqlite":
+    event.listen(engine, "connect", _set_sqlite_pragma)
+
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False, autoflush=False, future=True)
 Base.metadata.create_all(engine)
 
@@ -94,6 +103,105 @@ def _ensure_patient_record_number_schema() -> None:
 
 _ensure_patient_record_number_schema()
 
+
+def _default_owner_user_id(connection) -> int:
+    existing_user_id = connection.execute(
+        text("SELECT id FROM users ORDER BY id LIMIT 1")
+    ).scalar_one_or_none()
+    if existing_user_id is not None:
+        return int(existing_user_id)
+
+    insert_result = connection.execute(
+        text(
+            "INSERT INTO users (username, full_name, email, hashed_password, location, title, speciality) "
+            "VALUES (:username, :full_name, :email, :hashed_password, :location, :title, :speciality)"
+        ),
+        {
+            "username": "system@local",
+            "full_name": "System Owner",
+            "email": None,
+            "hashed_password": "system-managed",
+            "location": "System",
+            "title": "System",
+            "speciality": "System",
+        },
+    )
+    return int(insert_result.lastrowid)
+
+
+def _repair_foreign_key_rows() -> None:
+    with engine.begin() as connection:
+        inspector = inspect(connection)
+        tables = set(inspector.get_table_names())
+        if not {"users", "patients"}.issubset(tables):
+            return
+
+        owner_user_id = _default_owner_user_id(connection)
+        connection.execute(
+            text(
+                "UPDATE patients SET user_id = :owner_user_id "
+                "WHERE user_id NOT IN (SELECT id FROM users)"
+            ),
+            {"owner_user_id": owner_user_id},
+        )
+
+        # Remove child rows whose parent patient is already gone so FK enforcement can remain strict.
+        for table_name in ("labresults", "doctornotes", "testresults"):
+            if table_name not in tables:
+                continue
+            connection.execute(
+                text(
+                    f"DELETE FROM {table_name} "
+                    "WHERE patient_id NOT IN (SELECT patient_id FROM patients)"
+                )
+            )
+
+
+_repair_foreign_key_rows()
+
+
+def _ensure_testresults_schema() -> None:
+    with engine.begin() as connection:
+        inspector = inspect(connection)
+        if "testresults" not in inspector.get_table_names():
+            return
+
+        columns = {column["name"] for column in inspector.get_columns("testresults")}
+        column_additions = {
+            "session_id": "ALTER TABLE testresults ADD COLUMN session_id VARCHAR(64)",
+            "fps": "ALTER TABLE testresults ADD COLUMN fps INTEGER",
+            "summary_available": "ALTER TABLE testresults ADD COLUMN summary_available BOOLEAN",
+            "dtw": "ALTER TABLE testresults ADD COLUMN dtw JSON",
+            "extra": "ALTER TABLE testresults ADD COLUMN extra JSON",
+        }
+
+        for column_name, ddl in column_additions.items():
+            if column_name not in columns:
+                connection.execute(text(ddl))
+
+        indexes = {index["name"] for index in inspect(connection).get_indexes("testresults")}
+        index_additions = {
+            "ix_testresults_patient_date": (
+                "CREATE INDEX IF NOT EXISTS ix_testresults_patient_date "
+                "ON testresults (patient_id, test_date)"
+            ),
+            "ix_testresults_patient_name": (
+                "CREATE INDEX IF NOT EXISTS ix_testresults_patient_name "
+                "ON testresults (patient_id, test_name)"
+            ),
+            "ix_testresults_session_id": (
+                "CREATE INDEX IF NOT EXISTS ix_testresults_session_id "
+                "ON testresults (session_id)"
+            ),
+        }
+
+        for index_name, ddl in index_additions.items():
+            if index_name not in indexes:
+                connection.execute(text(ddl))
+
+
+_ensure_testresults_schema()
+
 # ----------------- Helpers -----------------
 _NUM_RE = re.compile(r"(\d+\.?\d*)")
 _async_lock = asyncio.Lock()
@@ -125,6 +233,25 @@ def _next_record_number(session: Session) -> str:
 
 def _gen_entry_id(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex}"
+
+
+def _get_default_owner_user_id(session: Session) -> int:
+    existing = session.query(User.id).order_by(User.id.asc()).first()
+    if existing is not None:
+        return int(existing[0])
+
+    owner = User(
+        username="system@local",
+        full_name="System Owner",
+        email=None,
+        hashed_password="system-managed",
+        location="System",
+        title="System",
+        speciality="System",
+    )
+    session.add(owner)
+    session.flush()
+    return int(owner.id)
 
 def _validate(data: Dict[str, Any]) -> Dict[str, str]:
     errors: Dict[str, str] = {}
@@ -494,11 +621,12 @@ def create_patient(
         with SessionLocal() as session:
             prepo = PatientRepository(session)
             record_number = _next_record_number(session)
+            owner_user_id = _get_default_owner_user_id(session)
 
             dbp = Patient(
                 patient_id=patient_id,
                 record_number=record_number,
-                user_id=123,
+                user_id=owner_user_id,
                 name=name,
                 dob=dob,
                 height=int(h) if h is not None else None,
@@ -727,36 +855,6 @@ async def async_import_patients_csv_text(csv_text: str) -> Dict[str, Any]:
         return import_patients_csv_text(csv_text)
 
 
-TEST_HISTORY_FILE = str(TEST_HISTORY_PATH)
-
-class TestHistoryManager:
-    _lock = threading.Lock()
-
-    def __init__(self, file_path: str = TEST_HISTORY_FILE):
-        self.file_path = file_path
-        self._load()
-
-    def _load(self):
-        if os.path.exists(self.file_path):
-            with open(self.file_path, 'r') as f:
-                self.data = json.load(f)
-        else:
-            self.data = {}
-
-    def _save(self):
-        with open(self.file_path, 'w') as f:
-            json.dump(self.data, f, indent=2)
-
-    def get_patient_tests(self, patient_id: str):
-        return self.data.get(patient_id, [])
-
-    def add_patient_test(self, patient_id: str, test_data: dict):
-        with self._lock:
-            self._load()
-            if patient_id not in self.data:
-                self.data[patient_id] = []
-            self.data[patient_id].append(test_data)
-            self._save()
 
     def get_all_tests(self):
         return self.data

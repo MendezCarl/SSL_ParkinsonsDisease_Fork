@@ -37,6 +37,38 @@ export interface TestIndicator {
   description: string;
 }
 
+export interface PersistedDtwAnalysis {
+  session_id?: string | null;
+  distance_pos?: number | null;
+  distance_amp?: number | null;
+  distance_spd?: number | null;
+  avg_step_pos?: number | null;
+  avg_step_cost?: number | null;
+  similarity_overall?: number | null;
+  similarity_pos?: number | null;
+  similarity_amp?: number | null;
+  similarity_spd?: number | null;
+  distance?: number | null;
+  similarity?: number | null;
+}
+
+export interface PersistedMlPrediction {
+  predicted_updrs_stage: number;
+  probabilities: Record<string, number>;
+  severity: string;
+  severity_stage: number;
+  prediction: string;
+  confidence: number;
+  model_version?: string | null;
+  preprocessing_version?: string | null;
+  generated_at?: string | null;
+}
+
+export interface TestAnalysisSnapshot {
+  dtwMetrics?: PersistedDtwAnalysis | null;
+  mlPrediction?: PersistedMlPrediction | null;
+}
+
 export interface Test {
   id: string;
   patientId: string;
@@ -54,6 +86,7 @@ export interface Test {
   distance?: number | null;
   dtwSessionId?: string | null;
   indicator?: TestIndicator;
+  analysis?: TestAnalysisSnapshot | null;
   results?: TestResults;
 }
 
