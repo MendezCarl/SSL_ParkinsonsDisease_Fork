@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from uuid import uuid4
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,6 +24,8 @@ print(f"[DTW] DTW_BASE       = {DTW_BASE}")
 
 # ================== NORMALIZATION / GUARDS ==================
 ALLOWED_TESTS = {"stand-and-sit", "finger-tapping", "fist-open-close"}
+ALLOWED_TEMPLATE_MODELS = {"hands", "pose", "finger"}
+_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
 _TEST_NORMALIZATION_ALIASES = {
     "stand-and-sit": "stand-and-sit",
@@ -55,6 +58,41 @@ def normalize_test_name(t: str | None) -> str:
         t = t.replace("--", "-")
     return _TEST_NORMALIZATION_ALIASES.get(t, t)
 
+
+def validate_test_name(test_name: str | None) -> str:
+    canonical = normalize_test_name(test_name)
+    if canonical not in ALLOWED_TESTS:
+        raise ValueError("Invalid test name")
+    return canonical
+
+
+def validate_template_model(model: str | None) -> str:
+    normalized = (model or "").strip().lower()
+    if normalized not in ALLOWED_TEMPLATE_MODELS:
+        raise ValueError("Invalid DTW model")
+    return normalized
+
+
+def validate_session_id(session_id: str | None) -> str:
+    candidate = (session_id or "").strip()
+    if not _SESSION_ID_RE.fullmatch(candidate):
+        raise ValueError("Invalid DTW session id")
+    return candidate
+
+
+def _safe_dtw_path(base_dir: Path, *parts: str) -> Path:
+    base_resolved = base_dir.resolve(strict=False)
+    candidate = base_dir.joinpath(*parts).resolve(strict=False)
+    try:
+        candidate.relative_to(base_resolved)
+    except ValueError as exc:
+        raise ValueError("Invalid DTW storage path") from exc
+    return candidate
+
+
+def resolve_dtw_session_dir(test_name: str, session_id: str) -> Path:
+    return _safe_dtw_path(DTW_BASE, validate_test_name(test_name), validate_session_id(session_id))
+
 def _ensure_dir(p: Path) -> None:
     p.mkdir(parents=True, exist_ok=True)
 
@@ -69,9 +107,9 @@ class TemplateLibrary:
     @staticmethod
     def load(test_name: str, model: str) -> np.ndarray:
         """Load reference template X (T_ref, D) from backend/data/templates/<test>/<model>.npz."""
-        test_key = normalize_test_name(test_name)
-
-        primary = TEMPLATES_ROOT / test_key / f"{model}.npz"
+        test_key = validate_test_name(test_name)
+        model_key = validate_template_model(model)
+        primary = _safe_dtw_path(TEMPLATES_ROOT, test_key, f"{model_key}.npz")
 
         if primary.exists():
             X = np.load(str(primary))["X"].astype(np.float32)
@@ -198,9 +236,12 @@ def save_dtw_npz(
     if canonical not in ALLOWED_TESTS:
         canonical = "stand-and-sit" if "sit" in (test_name or "") else \
                     "finger-tapping" if "finger" in (test_name or "") else "fist-open-close"
+    canonical = validate_test_name(canonical)
+    model_key = validate_template_model(model)
+    session_key = validate_session_id(session_id)
 
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-    folder = (DTW_BASE / canonical / session_id)
+    folder = _safe_dtw_path(DTW_BASE, canonical, session_key)
     _ensure_dir(folder)
 
     np.savez_compressed(
@@ -224,9 +265,9 @@ def save_dtw_npz(
 
     meta_out = {
         "testName": canonical,
-        "model": model,
+        "model": model_key,
         "created_utc": ts,
-        "session_id": session_id,
+        "session_id": session_key,
         "live_len": int(len(X_live)),
         "ref_len": int(len(Y_ref)),
         "dim": int(X_live.shape[1]),
@@ -241,7 +282,7 @@ def save_dtw_npz(
         "npz": str(folder / "dtw_artifacts.npz"),
         "json": str(folder / "meta.json"),
         "test_name": canonical,
-        "session_id": session_id,
+        "session_id": session_key,
         "created_utc": ts,
     }
 

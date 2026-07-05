@@ -6,6 +6,7 @@ import numpy as np
 from fastapi import APIRouter, HTTPException, Query
 
 from schema.patient_contracts import PatientUpdate
+from routes.utils_dtw import resolve_dtw_session_dir
 from services import patient_service
 from services.test_history_service import persist_session_analysis
 from schema.classifier_schema import (
@@ -15,10 +16,6 @@ from schema.classifier_schema import (
     LSTMCNNPredictResponse,
 )
 from services.lstm_cnn_inference import inference_service
-from storage_paths import DTW_RUNS_DIR
-
-# DTW runs root — same path used by utils_dtw.py
-_DTW_BASE = DTW_RUNS_DIR
 
 # Hand landmark indices used to build the (T,24) sequence for the ML model.
 # 8 landmarks × (x, y from DTW) + z=0  →  8×3 = 24 features
@@ -43,7 +40,11 @@ def _session_to_ml_sequence(test_name: str, session_id: str) -> np.ndarray:
 
     Strategy: take 8 key landmark (x, y) pairs and pad z=0 → (T, 24).
     """
-    session_dir = _DTW_BASE / test_name / session_id
+    try:
+        session_dir = resolve_dtw_session_dir(test_name, session_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
     if not session_dir.is_dir():
         raise HTTPException(
             404,

@@ -155,3 +155,11 @@ def test_predict_from_session_persists_prediction_snapshot(monkeypatch):
     assert captured["session_id"] == "session-123"
     assert captured["ml_prediction"]["predicted_updrs_stage"] == 2
     assert captured["ml_prediction"]["severity"] == "Stage 3"
+
+
+def test_predict_from_session_rejects_invalid_session_id():
+    client = TestClient(app)
+    response = client.get("/ml/updrs/from_session/finger-tapping/%2E%2E")
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Invalid DTW session id"

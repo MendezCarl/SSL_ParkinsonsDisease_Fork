@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from typing import Any, Dict, List, Optional, Annotated
 from datetime import datetime, timedelta, timezone
+import logging
 import os
 import shutil
 import uvicorn
@@ -17,7 +18,7 @@ from repo.sql_models import User
 from patient_manager import SessionLocal
 from storage_paths import RECORDINGS_DIR
 from routes.utils_dtw import generate_session_id, normalize_test_name
-from services.recording_service import save_uploaded_video
+from services.recording_service import resolve_recording_path, save_uploaded_video
 from services.test_history_service import (
     append_patient_test,
     build_uploaded_video_test_history_entry,
@@ -26,12 +27,17 @@ from services.test_history_service import (
 )
 
 try:
-    from jose import jwt, JWTError
+    import jwt
+    from jwt import InvalidTokenError
 except ModuleNotFoundError:  # pragma: no cover - exercised in minimal test environments
-    jwt = None
+    try:
+        from jose import jwt
+        from jose import JWTError as InvalidTokenError
+    except ModuleNotFoundError:  # pragma: no cover - exercised in minimal test environments
+        jwt = None
 
-    class JWTError(Exception):
-        pass
+        class InvalidTokenError(Exception):
+            pass
 
 try:
     from passlib.context import CryptContext
@@ -40,6 +46,7 @@ except ModuleNotFoundError:  # pragma: no cover - exercised in minimal test envi
 
 # ============ Paths / Folders ============
 RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
+logger = logging.getLogger(__name__)
 
 # ============ Lazy imports (avoid libGL issues on boot) ============
 
@@ -345,7 +352,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
             username = payload.get("sub")
             if username is None:
                 raise HTTPException(status_code=401, detail="Invalid authentication credentials")
-        except JWTError:
+        except InvalidTokenError:
             raise HTTPException(status_code=401, detail="Invalid authentication credentials")
     with SessionLocal() as session:
         user = session.query(User).filter_by(username=username).first()
@@ -446,8 +453,9 @@ async def upload_video(
             "test_name": test_name,
             "session_id": session_id,
         }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    except Exception:
+        logger.exception("Video upload failed")
+        return {"success": False, "error": "Failed to upload video"}
 
 @app.get(
     "/videos/{patient_id}/{test_name}",
@@ -467,7 +475,10 @@ def list_videos(patient_id: str, test_name: str):
                 continue
             recording_file = entry.get("recording_file")
             if recording_file and recording_file.lower().endswith(_VIDEO_EXTENSIONS):
-                filepath = RECORDINGS_DIR / recording_file
+                try:
+                    filepath = resolve_recording_path(recording_file)
+                except ValueError:
+                    continue
                 if filepath.exists():
                     seen.add(recording_file)
 
@@ -483,25 +494,30 @@ def list_videos(patient_id: str, test_name: str):
 
         matching = sorted(
             seen,
-            key=lambda f: os.path.getmtime(RECORDINGS_DIR / f),
+            key=lambda f: os.path.getmtime(resolve_recording_path(f)),
             reverse=True,
         )
         return {"success": True, "videos": matching}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    except Exception:
+        logger.exception("Listing videos failed")
+        return {"success": False, "error": "Failed to list videos"}
 
 @app.get("/recordings/{filename}", response_class=FileResponse)
 def get_recording_file(filename: str):
-    file_path = RECORDINGS_DIR / filename
-    if not os.path.exists(file_path):
+    try:
+        file_path = resolve_recording_path(filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Video not found") from exc
+    if not file_path.exists():
         raise HTTPException(status_code=404, detail="Video not found")
-    if filename.endswith(".webm"):
+    suffix = file_path.suffix.lower()
+    if suffix == ".webm":
         media_type = "video/webm"
-    elif filename.endswith(".mov"):
+    elif suffix == ".mov":
         media_type = "video/quicktime"
     else:
         media_type = "video/mp4"
-    return FileResponse(file_path, media_type=media_type)
+    return FileResponse(str(file_path), media_type=media_type)
 
 # ============ Uvicorn ============
 if __name__ == "__main__":

@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Query, HTTPException, UploadFile, File
 
 from typing import List, Optional, Dict, Any, Union
@@ -20,6 +22,7 @@ _num = re.compile(r"(\d+\.?\d*)")
 
 
 router = APIRouter(prefix="/patients")
+logger = logging.getLogger(__name__)
 
 
 @router.post("/", response_model=PatientMutationResponse)
@@ -36,9 +39,11 @@ async def create_patient(patient: PatientCreate):
     )
 
     if not result or not result.get("success"):
-        # Prefer detailed errors if present
-        detail = result.get("errors") if result and result.get("errors") else result.get("error", "Failed to create patient")
-        raise HTTPException(status_code=422 if isinstance(detail, dict) else 400, detail=detail)
+        detail = result.get("errors") if result and isinstance(result.get("errors"), dict) and result.get("errors") else None
+        if detail is not None:
+            raise HTTPException(status_code=422, detail=detail)
+        logger.warning("Create patient failed: %s", result)
+        raise HTTPException(status_code=400, detail="Failed to create patient")
 
     return result
 
