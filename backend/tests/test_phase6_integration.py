@@ -15,10 +15,8 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 import main
-import patient_manager
 import routes.websockets as ws_routes
 import services.recording_service as recording_service
-import services.test_history_service as test_history_service
 from main import app
 from schema.keypoint_contracts import build_hand_payload
 
@@ -38,13 +36,6 @@ def _patient_create_payload(name: str, severity: str = "Stage 2") -> dict:
         "lab_results_history": [],
         "doctors_notes_history": [],
     }
-
-
-def _set_temp_history(monkeypatch, history_path: Path):
-    def manager_factory():
-        return patient_manager.TestHistoryManager(file_path=str(history_path))
-
-    monkeypatch.setattr(test_history_service, "TestHistoryManager", manager_factory)
 
 
 def test_phase6_system_and_auth_smoke():
@@ -156,52 +147,51 @@ def test_phase6_patient_crud_and_csv_import():
 def test_phase6_upload_video_and_history_flow(monkeypatch, tmp_path):
     recordings_dir = tmp_path / "recordings"
     recordings_dir.mkdir(parents=True, exist_ok=True)
-    history_path = tmp_path / "test_history.json"
-    history_path.write_text("{}")
 
     monkeypatch.setattr(main, "RECORDINGS_DIR", recordings_dir)
     monkeypatch.setattr(recording_service, "RECORDINGS_DIR", recordings_dir)
-    _set_temp_history(monkeypatch, history_path)
 
     client = TestClient(app)
-    patient_id = f"upload-{_unique_suffix()}"
+    create_response = client.post("/patients/", json=_patient_create_payload(f"Upload {_unique_suffix()}"))
+    assert create_response.status_code == 200, create_response.text
+    patient_id = create_response.json()["patient_id"]
 
-    upload_response = client.post(
-        "/upload-video/",
-        data={"patient_id": patient_id, "test_name": "finger-tapping"},
-        files={"video": ("clip.webm", b"fake-webm-bytes", "video/webm")},
-    )
-    assert upload_response.status_code == 200, upload_response.text
-    body = upload_response.json()
-    assert body["success"] is True
+    try:
+        upload_response = client.post(
+            "/upload-video/",
+            data={"patient_id": patient_id, "test_name": "finger-tapping"},
+            files={"video": ("clip.webm", b"fake-webm-bytes", "video/webm")},
+        )
+        assert upload_response.status_code == 200, upload_response.text
+        body = upload_response.json()
+        assert body["success"] is True
 
-    filename = body["filename"]
-    assert (recordings_dir / filename).is_file()
+        filename = body["filename"]
+        assert (recordings_dir / filename).is_file()
 
-    videos_response = client.get(f"/videos/{patient_id}/finger-tapping")
-    assert videos_response.status_code == 200
-    assert filename in videos_response.json()["videos"]
+        videos_response = client.get(f"/videos/{patient_id}/finger-tapping")
+        assert videos_response.status_code == 200
+        assert filename in videos_response.json()["videos"]
 
-    tests_response = client.get(f"/patients/{patient_id}/tests")
-    assert tests_response.status_code == 200
-    tests = tests_response.json()["tests"]
-    assert len(tests) == 1
-    assert tests[0]["recording_file"] == filename
-    assert tests[0]["summary_available"] is True
+        tests_response = client.get(f"/patients/{patient_id}/tests")
+        assert tests_response.status_code == 200
+        tests = tests_response.json()["tests"]
+        assert len(tests) == 1
+        assert tests[0]["recording_file"] == filename
+        assert tests[0]["summary_available"] is True
 
-    recording_response = client.get(f"/recordings/{filename}")
-    assert recording_response.status_code == 200
+        recording_response = client.get(f"/recordings/{filename}")
+        assert recording_response.status_code == 200
+    finally:
+        client.delete(f"/patients/{patient_id}")
 
 
 def test_phase6_websocket_recording_flow(monkeypatch, tmp_path):
     recordings_dir = tmp_path / "recordings"
     recordings_dir.mkdir(parents=True, exist_ok=True)
-    history_path = tmp_path / "test_history.json"
-    history_path.write_text("{}")
 
     monkeypatch.setattr(main, "RECORDINGS_DIR", recordings_dir)
     monkeypatch.setattr(recording_service, "RECORDINGS_DIR", recordings_dir)
-    _set_temp_history(monkeypatch, history_path)
 
     class FakeExtractor:
         def __init__(self, model: str = "hands"):
@@ -256,44 +246,49 @@ def test_phase6_websocket_recording_flow(monkeypatch, tmp_path):
     monkeypatch.setattr(ws_routes, "save_frames_to_mp4", fake_save_frames_to_mp4)
 
     client = TestClient(app)
-    patient_id = f"ws-{_unique_suffix()}"
+    create_response = client.post("/patients/", json=_patient_create_payload(f"Websocket {_unique_suffix()}"))
+    assert create_response.status_code == 200, create_response.text
+    patient_id = create_response.json()["patient_id"]
 
-    with client.websocket_connect("/ws/camera") as websocket:
-        websocket.send_json(
-            {
-                "type": "init",
-                "patientId": patient_id,
-                "testType": "finger-tapping",
-                "testId": "test-route-id",
-                "model": "hands",
-                "fps": 15,
-            }
-        )
-        init_msg = websocket.receive_json()
-        assert init_msg["type"] == "status"
-        assert init_msg["status"] == "initialized"
-        assert init_msg["sessionId"] == "20260704T120000_fake1234"
+    try:
+        with client.websocket_connect("/ws/camera") as websocket:
+            websocket.send_json(
+                {
+                    "type": "init",
+                    "patientId": patient_id,
+                    "testType": "finger-tapping",
+                    "testId": "test-route-id",
+                    "model": "hands",
+                    "fps": 15,
+                }
+            )
+            init_msg = websocket.receive_json()
+            assert init_msg["type"] == "status"
+            assert init_msg["status"] == "initialized"
+            assert init_msg["sessionId"] == "20260704T120000_fake1234"
 
-        websocket.send_json({"type": "frame", "data": f"data:image/jpeg;base64,{base64.b64encode(b'fake').decode()}"})
-        keypoints_msg = websocket.receive_json()
-        assert keypoints_msg["type"] == "keypoints"
-        assert keypoints_msg["model"] == "hands"
-        assert keypoints_msg["detections"][0]["kind"] == "hand"
+            websocket.send_json({"type": "frame", "data": f"data:image/jpeg;base64,{base64.b64encode(b'fake').decode()}"})
+            keypoints_msg = websocket.receive_json()
+            assert keypoints_msg["type"] == "keypoints"
+            assert keypoints_msg["model"] == "hands"
+            assert keypoints_msg["detections"][0]["kind"] == "hand"
 
-        websocket.send_json({"type": "end"})
-        dtw_saved = websocket.receive_json()
-        assert dtw_saved["type"] == "dtw_saved"
-        assert dtw_saved["sessionId"] == "20260704T120000_fake1234"
+            websocket.send_json({"type": "end"})
+            dtw_saved = websocket.receive_json()
+            assert dtw_saved["type"] == "dtw_saved"
+            assert dtw_saved["sessionId"] == "20260704T120000_fake1234"
 
-        complete = websocket.receive_json()
-        assert complete["type"] == "complete"
-        assert complete["summaryAvailable"] is True
-        assert complete["dtw"]["session_id"] == "20260704T120000_fake1234"
+            complete = websocket.receive_json()
+            assert complete["type"] == "complete"
+            assert complete["summaryAvailable"] is True
+            assert complete["dtw"]["session_id"] == "20260704T120000_fake1234"
 
-    tests_response = client.get(f"/patients/{patient_id}/tests")
-    assert tests_response.status_code == 200
-    tests = tests_response.json()["tests"]
-    assert len(tests) == 1
-    assert tests[0]["test_id"] == "20260704T120000_fake1234"
-    assert tests[0]["dtw"]["session_id"] == "20260704T120000_fake1234"
-    assert tests[0]["summary_available"] is True
+        tests_response = client.get(f"/patients/{patient_id}/tests")
+        assert tests_response.status_code == 200
+        tests = tests_response.json()["tests"]
+        assert len(tests) == 1
+        assert tests[0]["test_id"] == "20260704T120000_fake1234"
+        assert tests[0]["dtw"]["session_id"] == "20260704T120000_fake1234"
+        assert tests[0]["summary_available"] is True
+    finally:
+        client.delete(f"/patients/{patient_id}")

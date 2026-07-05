@@ -12,7 +12,7 @@ from fastapi import HTTPException
 
 from routes.utils_dtw import ALLOWED_TESTS, EndOnlyDTW, generate_session_id, normalize_test_name
 from services import patient_service
-from services.test_history_service import get_patient_tests as load_patient_tests
+from services.test_history_service import get_patient_tests as load_patient_tests, persist_session_analysis
 from storage_paths import DTW_RUNS_DIR, LABELLED_TRAINING_DATA_DIR
 
 
@@ -221,7 +221,7 @@ class DtwService:
 
         canonical_test_name = self.normalize_test_name(test_name)
         canonical_session_id = str(meta.get("session_id") or session_id)
-        return {
+        response = {
             "ok": True,
             "testName": canonical_test_name,
             "sessionId": canonical_session_id,
@@ -239,6 +239,24 @@ class DtwService:
                 "speed": _series_bundle(spd_local, spd_align),
             },
         }
+        persist_session_analysis(
+            canonical_session_id,
+            dtw_metrics={
+                "session_id": canonical_session_id,
+                "distance_pos": response.get("distance_pos"),
+                "distance_amp": response.get("distance_amp"),
+                "distance_spd": response.get("distance_spd"),
+                "avg_step_pos": response.get("avg_step_pos"),
+                "avg_step_cost": response.get("avg_step_pos"),
+                "similarity_overall": response.get("similarity_overall"),
+                "similarity_pos": response.get("similarity_pos"),
+                "similarity_amp": response.get("similarity_amp"),
+                "similarity_spd": response.get("similarity_spd"),
+                "distance": response.get("distance_pos"),
+                "similarity": response.get("similarity_overall"),
+            },
+        )
+        return response
 
     def download_paths(self, test_name: str, session_id: str) -> Dict[str, str]:
         session_dir, _ = self._resolve_session_dir_and_meta(test_name, session_id)

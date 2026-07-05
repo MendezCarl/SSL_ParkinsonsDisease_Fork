@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import sys
 
+import numpy as np
 from fastapi.testclient import TestClient
 
 # Ensure backend imports work whether pytest is run from repo root or backend dir.
@@ -98,3 +99,50 @@ def test_lookup_session_can_resolve_canonical_id_with_patient_scope(monkeypatch,
         params={"patient_id": "patient-b"},
     )
     assert wrong_patient.status_code == 404
+
+
+def test_get_series_persists_dtw_snapshot(monkeypatch, tmp_path):
+    captured: dict = {}
+    monkeypatch.setattr(dtw_service_module, "DTW_BASE", tmp_path)
+    monkeypatch.setattr(
+        dtw_service_module,
+        "persist_session_analysis",
+        lambda session_id, **payload: captured.update({"session_id": session_id, **payload}) or True,
+    )
+
+    session_dir = tmp_path / "finger-tapping" / "session-123"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    (session_dir / "meta.json").write_text(
+        json.dumps(
+            {
+                "testName": "finger-tapping",
+                "model": "hands",
+                "session_id": "session-123",
+                "pos_dtw": 1.5,
+                "amp_dtw": 2.5,
+                "spd_dtw": 3.5,
+                "avg_step_pos": 0.25,
+                "similarity_overall": 0.8,
+                "similarity_pos": 0.7,
+                "similarity_amp": 0.6,
+                "similarity_spd": 0.5,
+            }
+        )
+    )
+    np.savez(
+        session_dir / "dtw_artifacts.npz",
+        pos_local_costs=np.array([0.1, 0.2, 0.3]),
+        pos_aligned_ref_by_live=np.array([0, 1, 2]),
+        amp_local_costs=np.array([0.2, 0.3, 0.4]),
+        amp_aligned_ref_by_live=np.array([0, 1, 2]),
+        spd_local_costs=np.array([0.3, 0.4, 0.5]),
+        spd_aligned_ref_by_live=np.array([0, 1, 2]),
+    )
+
+    client = TestClient(app)
+    response = client.get("/dtw/sessions/finger-tapping/session-123/series")
+
+    assert response.status_code == 200
+    assert captured["session_id"] == "session-123"
+    assert captured["dtw_metrics"]["distance_pos"] == 1.5
+    assert captured["dtw_metrics"]["similarity_overall"] == 0.8

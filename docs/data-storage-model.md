@@ -18,7 +18,7 @@ Current live tables:
 - `doctornotes`
 - `testresults`
 
-### 2. JSON test history
+### 2. Legacy JSON test history import source
 
 Path:
 
@@ -26,8 +26,8 @@ Path:
 
 Purpose:
 
-- current patient-facing test timeline feed
-- recording/test-summary history used by `/patients/{id}/tests`
+- historical import source for legacy timeline rows
+- optional backup/reference file during the SQLite cutover
 
 ### 3. File-based artifact storage
 
@@ -120,23 +120,36 @@ Columns:
 - `test_date DATETIME`
 - `recording_file VARCHAR(512)`
 - `frame_count INTEGER`
+- `session_id VARCHAR(64)`
+- `fps INTEGER`
+- `summary_available BOOLEAN`
+- `dtw JSON`
+- `extra JSON`
 
 Indexes/constraints:
 
 - FK: `patient_id -> patients.patient_id ON DELETE CASCADE`
 - index: `ix_testresults_patient_id`
+- index: `ix_testresults_patient_date`
+- index: `ix_testresults_patient_name`
+- index: `ix_testresults_session_id`
 
-## Important Caveat: Not Everything Uses SQLite Yet
+## Authoritative Split After The Refactor
 
-Even though `testresults` exists in SQLAlchemy and the SQLite schema, the active patient-facing test-history timeline is still JSON-backed through `backend/data/test_history.json`.
+After the test-history migration:
 
-That means:
+- SQLite is authoritative for users/patients/lab results/doctor notes/test history
+- DTW artifacts and recordings remain authoritative on disk
+- `backend/data/test_history.json` is no longer a runtime source of truth
+- SQLite foreign-key enforcement is enabled at runtime, so child rows must reference real parent rows
 
-- SQL is authoritative for users/patients/lab results/doctor notes
-- JSON is authoritative for the current `/patients/{id}/tests` history feed
-- DTW artifacts and recordings are authoritative on disk
+This removes the previous JSON compatibility layer from `/patients/{id}/tests` while still keeping large binary and DTW artifact data file-based.
 
-This is the main reason the project still looks like a hybrid persistence model.
+Persisted revisit snapshots now live on the same `testresults` rows:
+
+- lightweight DTW summary metrics are stored for reuse in the revisit UI
+- ML prediction snapshots are stored after session-based inference runs
+- raw DTW arrays and other heavy artifacts remain file-based
 
 ## Why It Is Still Structured This Way
 
@@ -160,9 +173,19 @@ DTW sessions store large arrays, alignment data, and metadata in a way that is n
 
 Video storage and file serving are simpler and more transparent on the filesystem than in SQLite blobs.
 
-### JSON test history is the remaining compatibility layer
+### Legacy JSON history is now a migration source only
 
-The JSON history file survives mainly because it was already the active runtime history mechanism and could be normalized without migrating the entire historical timeline into SQL.
+The JSON history file remains useful for one-time migration and audit purposes, but runtime reads and writes now belong in `testresults`.
+
+### SQLite relationships are now enforced
+
+The backend enables `PRAGMA foreign_keys = ON` for runtime connections.
+
+That means:
+
+- `patients.user_id` must reference a real `users.id`
+- `labresults`, `doctornotes`, and `testresults` must reference a real `patients.patient_id`
+- uploads, websocket recordings, and direct test-history writes now require the patient record to exist first
 
 ## Historical Compatibility
 
@@ -178,6 +201,8 @@ Current mitigation:
 - patient-scoped DTW lookup/list endpoints
 - historical migration script:
   - `backend/scripts/migrate_historical_dtw.py`
+- legacy history import script:
+  - `backend/scripts/migrate_test_history_to_sqlite.py`
 
 ## Recommended Related Docs
 

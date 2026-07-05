@@ -135,3 +135,23 @@ def test_predict_checkpoint_missing_returns_500(monkeypatch):
 
     assert response.status_code == 500
     assert "checkpoint missing" in response.json()["detail"]
+
+
+def test_predict_from_session_persists_prediction_snapshot(monkeypatch):
+    captured: dict = {}
+
+    monkeypatch.setattr(classifier_routes, "_session_to_ml_sequence", lambda *args, **kwargs: [[0.1] * 24 for _ in range(30)])
+    monkeypatch.setattr(classifier_routes.inference_service, "predict", lambda **kwargs: _mock_prediction())
+    monkeypatch.setattr(
+        classifier_routes,
+        "persist_session_analysis",
+        lambda session_id, **payload: captured.update({"session_id": session_id, **payload}) or True,
+    )
+
+    client = TestClient(app)
+    response = client.get("/ml/updrs/from_session/finger-tapping/session-123")
+
+    assert response.status_code == 200
+    assert captured["session_id"] == "session-123"
+    assert captured["ml_prediction"]["predicted_updrs_stage"] == 2
+    assert captured["ml_prediction"]["severity"] == "Stage 3"

@@ -10,7 +10,7 @@ from typing import List, Optional, Dict, Any
 from schema.keypoint_contracts import build_hand_payload, build_pose_payload
 from services.dtw_service import dtw_service
 from services.recording_service import save_frames_to_mp4
-from services.test_history_service import append_patient_test, build_completed_test_history_entry
+from services.test_history_service import append_patient_test, build_completed_test_history_entry, patient_exists
 from fastapi import APIRouter
 
 router = APIRouter(prefix="/ws", tags=["websockets"])
@@ -175,6 +175,8 @@ async def _camera_ws_handler(websocket: WebSocket):
             if mtype == "init":
                 try:
                     patient_id = data.get("patientId") or data.get("patient_id")
+                    if not patient_id or not patient_exists(patient_id):
+                        raise ValueError("Patient not found")
                     raw_test = data.get("testType") or data.get("test_name")
                     test_name = dtw_service.normalize_test_name(raw_test)
                     model = data.get("model", model)                   # "hands" | "pose"
@@ -294,6 +296,9 @@ async def _camera_ws_handler(websocket: WebSocket):
                         frame_count=len(frames),
                         fps=fps_hint,
                         similarity=payload.get("similarity_overall") if payload.get("ok") else None,
+                        similarity_pos=payload.get("similarity_pos") if payload.get("ok") else None,
+                        similarity_amp=payload.get("similarity_amp") if payload.get("ok") else None,
+                        similarity_spd=payload.get("similarity_spd") if payload.get("ok") else None,
                         distance=payload.get("distance") if payload.get("ok") else None,
                         avg_step_cost=payload.get("avg_step_cost") if payload.get("ok") else None,
                         model=model,

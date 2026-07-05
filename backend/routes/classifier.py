@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import numpy as np
 from fastapi import APIRouter, HTTPException, Query
 
 from schema.patient_contracts import PatientUpdate
 from services import patient_service
+from services.test_history_service import persist_session_analysis
 from schema.classifier_schema import (
     APIErrorResponse,
     LSTMCNNPredictAndUpdateResponse,
@@ -170,6 +173,20 @@ async def predict_updrs_from_session(
     seq = _session_to_ml_sequence(test_name, session_id)
     try:
         result = inference_service.predict(sequence=seq, return_attention=False)
+        persist_session_analysis(
+            session_id,
+            ml_prediction={
+                "predicted_updrs_stage": result.get("predicted_updrs_stage"),
+                "probabilities": result.get("probabilities"),
+                "severity": result.get("severity"),
+                "severity_stage": result.get("severity_stage"),
+                "prediction": result.get("prediction"),
+                "confidence": result.get("confidence"),
+                "model_version": result.get("model_version"),
+                "preprocessing_version": result.get("preprocessing_version"),
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
         return LSTMCNNPredictResponse(**result)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

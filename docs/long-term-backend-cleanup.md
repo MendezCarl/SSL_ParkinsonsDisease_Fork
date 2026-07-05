@@ -89,16 +89,16 @@ Goals:
 - clearer ownership of logic
 - easier testing
 
-### 3. Revisit active flat-file test history storage
+### 3. Remove the legacy flat-file test history artifact when safe
 
-`backend/data/test_history.json` is still active runtime data.
+`backend/data/test_history.json` is no longer the runtime source of truth after the SQLite test-history refactor.
 
 Future options:
 
-- keep it if lightweight flat-file history is intentional
-- migrate it into SQLite if the team wants a single storage model
+- keep it as a short-term audit/import artifact
+- remove it after the team confirms the SQLite migration is complete and no recovery use remains
 
-Do not change this casually; it is still used by live endpoints and WebSocket recording flow.
+The live endpoints and WebSocket recording flow should now rely on `testresults` instead.
 
 ### 4. Revisit old database artifacts
 
