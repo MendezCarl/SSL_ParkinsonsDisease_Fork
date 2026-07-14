@@ -179,6 +179,26 @@ Loads `X_live` from the session's `dtw_artifacts.npz`, extracts the 8 key landma
 
 ---
 
+## Anomaly Detection Jobs  `/ml/anomaly`
+
+Integration layer for an offline anomaly-detection model (VideoMAE embeddings + autoencoder reconstruction error) that runs on a separate, more powerful machine on the hospital's private network rather than in this process. See `docs/superpowers/specs/2026-07-11-anomaly-pipeline-integration-design.md` for the full design.
+
+The backend never calls the worker directly — the worker always polls in, so the backend doesn't need to know the worker's address or reachability.
+
+| Method | Path | Caller | Description |
+|---|---|---|---|
+| `POST` | `/ml/anomaly/sessions/{test_name}/{session_id}` | doctor (JWT) | Create (or reuse existing pending/processing) anomaly job for a session |
+| `GET` | `/ml/anomaly/jobs/{job_id}` | doctor (JWT) | Job status + result once available |
+| `GET` | `/ml/anomaly/jobs?status=pending` | worker (shared secret) | List jobs the worker can pick up |
+| `GET` | `/ml/anomaly/jobs/{job_id}/video` | worker (shared secret) | Fetch the recording for a job; transitions job to `processing` |
+| `POST` | `/ml/anomaly/jobs/{job_id}/complete` | worker (shared secret) | Report result or error; transitions job to `done`/`failed` |
+
+Worker-facing endpoints authenticate via a static bearer token (`ANOMALY_WORKER_TOKEN` env var), separate from the doctor JWT flow. Results are written to `anomaly_report.json` alongside `dtw_artifacts.npz` in the session directory, and surfaced through patient test history via `TestAnalysisSnapshot.anomaly_report`, the same way DTW/ML results already are.
+
+A separate `worker/` directory (top-level, own `requirements.txt`) implements the poll → fetch video → process → post-result loop against this contract. Its processing step is a `StubAnomalyProcessor` today, pending the real model.
+
+---
+
 ## Model Checkpoint
 
 ```
@@ -218,6 +238,7 @@ Supported test types: `finger-tapping`, `fist-open-close`, `stand-and-sit`
 | `data/templates/<test>/` | Generated DTW reference templates |
 | `data/jsons/` | Extracted keypoint JSON artifacts |
 | `data/test_history.json` | Active test history flat store |
+| `data/dtw_runs/<test>/<session>/anomaly_report.json` | Anomaly-detection job result (chunk anomaly ranges + confidence) |
 | `healthy_data/<test>/` | Healthy reference videos |
 | `models/` | MediaPipe `.task` files |
 | `data/app.db` | Active SQLite database used by `patient_manager.py` |

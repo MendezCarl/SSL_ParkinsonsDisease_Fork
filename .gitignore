@@ -78,3 +78,8 @@ backend/routes/templates/
 
 # Legacy model files
 backend/lstm_classifier.legacy_incompatible.pt
+
+# Local docs / notes and AI-tool config (not tracked going forward)
+docs/
+.claude/
+
