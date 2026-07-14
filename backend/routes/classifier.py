@@ -3,8 +3,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 import numpy as np
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from auth import get_current_user
 from schema.patient_contracts import PatientUpdate
 from routes.utils_dtw import resolve_dtw_session_dir
 from services import patient_service
@@ -15,7 +16,7 @@ from schema.classifier_schema import (
     LSTMCNNPredictRequest,
     LSTMCNNPredictResponse,
 )
-from services.lstm_cnn_inference import inference_service
+from services.lstm_cnn_inference import LSTMCNNInferenceService, get_inference_service
 
 # Hand landmark indices used to build the (T,24) sequence for the ML model.
 # 8 landmarks × (x, y from DTW) + z=0  →  8×3 = 24 features
@@ -85,7 +86,7 @@ def _session_to_ml_sequence(test_name: str, session_id: str) -> np.ndarray:
     return seq
 
 
-router = APIRouter(prefix="/ml", tags=["ml"])
+router = APIRouter(prefix="/ml", tags=["ml"], dependencies=[Depends(get_current_user)])
 
 
 @router.post(
@@ -93,7 +94,10 @@ router = APIRouter(prefix="/ml", tags=["ml"])
     response_model=LSTMCNNPredictResponse,
     responses={400: {"model": APIErrorResponse}, 500: {"model": APIErrorResponse}},
 )
-async def predict_updrs(payload: LSTMCNNPredictRequest) -> LSTMCNNPredictResponse:
+async def predict_updrs(
+    payload: LSTMCNNPredictRequest,
+    inference_service: LSTMCNNInferenceService = Depends(get_inference_service),
+) -> LSTMCNNPredictResponse:
     try:
         result = inference_service.predict(
             sequence=payload.sequence,
@@ -120,6 +124,7 @@ async def predict_updrs_and_update_patient(
         default=True,
         description="When false, return prediction without updating patient severity.",
     ),
+    inference_service: LSTMCNNInferenceService = Depends(get_inference_service),
 ) -> LSTMCNNPredictAndUpdateResponse:
     try:
         result = inference_service.predict(
@@ -170,6 +175,7 @@ async def predict_updrs_and_update_patient(
 async def predict_updrs_from_session(
     test_name: str,
     session_id: str,
+    inference_service: LSTMCNNInferenceService = Depends(get_inference_service),
 ) -> LSTMCNNPredictResponse:
     seq = _session_to_ml_sequence(test_name, session_id)
     try:

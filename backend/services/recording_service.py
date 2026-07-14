@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import BinaryIO, List
@@ -14,6 +13,8 @@ from storage_paths import RECORDINGS_DIR
 
 _ALLOWED_RECORDING_EXTENSIONS = {".mp4", ".mov", ".webm", ".avi", ".mkv"}
 _RECORDING_FILENAME_RE = re.compile(r"^[a-z0-9_-]+\.(mp4|mov|webm|avi|mkv)$")
+_MAX_UPLOAD_BYTES = 500 * 1024 * 1024  # 500 MB; clinical test recordings are short
+_COPY_CHUNK_BYTES = 1024 * 1024
 
 
 def _cv2():
@@ -140,6 +141,18 @@ def save_uploaded_video(
         extension=extension,
     )
     filepath = _safe_recording_path(filename)
-    with open(filepath, "wb") as buffer:
-        shutil.copyfileobj(upload_file, buffer)
+    total_bytes = 0
+    try:
+        with open(filepath, "wb") as buffer:
+            while True:
+                chunk = upload_file.read(_COPY_CHUNK_BYTES)
+                if not chunk:
+                    break
+                total_bytes += len(chunk)
+                if total_bytes > _MAX_UPLOAD_BYTES:
+                    raise ValueError(f"Upload exceeds maximum size of {_MAX_UPLOAD_BYTES} bytes")
+                buffer.write(chunk)
+    except Exception:
+        filepath.unlink(missing_ok=True)
+        raise
     return filename

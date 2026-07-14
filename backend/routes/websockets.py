@@ -1,12 +1,14 @@
 from fastapi import WebSocket, WebSocketDisconnect
 import base64
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 
 
 import numpy as np
 from typing import List, Optional, Dict, Any
+from auth import get_user_by_token
 from schema.keypoint_contracts import build_hand_payload, build_pose_payload
 from services.dtw_service import dtw_service
 from services.recording_service import save_frames_to_mp4
@@ -14,6 +16,24 @@ from services.test_history_service import append_patient_test, build_completed_t
 from fastapi import APIRouter
 
 router = APIRouter(prefix="/ws", tags=["websockets"])
+logger = logging.getLogger(__name__)
+
+_MAX_FRAME_BYTES = 5 * 1024 * 1024      # generous cap for one JPEG frame
+_MAX_SESSION_FRAMES = 9000              # ~5 min at 30fps; stops unbounded memory growth
+
+
+async def _authenticate_websocket(websocket: WebSocket) -> bool:
+    """Reject the connection before accept() if the token query param is missing/invalid."""
+    token = websocket.query_params.get("token")
+    if not token:
+        await websocket.close(code=4401)
+        return False
+    try:
+        get_user_by_token(token)
+    except Exception:
+        await websocket.close(code=4401)
+        return False
+    return True
 
 # Resolve model files relative to this file: backend/models/
 _MODELS_DIR = Path(__file__).resolve().parent.parent / "models"
@@ -39,6 +59,8 @@ def _decode_base64_image(data_str: str) -> np.ndarray:
     else:
         b64 = data_str
     img_bytes = base64.b64decode(b64)
+    if len(img_bytes) > _MAX_FRAME_BYTES:
+        raise ValueError(f"Frame exceeds maximum size of {_MAX_FRAME_BYTES} bytes")
     arr = np.frombuffer(img_bytes, dtype=np.uint8)
     cv2 = _cv2()
     frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
@@ -144,7 +166,7 @@ class MPExtractor:
             try:
                 self.solution.close()
             except Exception:
-                pass
+                logger.debug("MediaPipe solution close() raised; ignoring", exc_info=True)
             self.solution = None
 
 
@@ -152,6 +174,8 @@ class MPExtractor:
 
 # ============ WebSocket handler ============
 async def _camera_ws_handler(websocket: WebSocket):
+    if not await _authenticate_websocket(websocket):
+        return
     await websocket.accept()
 
     frames: List[np.ndarray] = []
@@ -215,6 +239,14 @@ async def _camera_ws_handler(websocket: WebSocket):
                 try:
                     if not started or not mp_extractor:
                         await websocket.send_json({"type": "error", "where": "frame", "message": "Not initialized"})
+                        continue
+
+                    if len(frames) >= _MAX_SESSION_FRAMES:
+                        await websocket.send_json({
+                            "type": "error",
+                            "where": "frame",
+                            "message": f"Session exceeds maximum of {_MAX_SESSION_FRAMES} frames; send 'end' to finalize.",
+                        })
                         continue
 
                     frame = _decode_base64_image(data["data"])
@@ -306,7 +338,10 @@ async def _camera_ws_handler(websocket: WebSocket):
                     )
                     append_patient_test(patient_id or "unknown", entry)
                 except Exception:
-                    pass
+                    logger.exception(
+                        "Failed to append test-history entry for patient %s, session %s",
+                        patient_id, session_id,
+                    )
 
                 await websocket.send_json({
                     "type": "complete",
@@ -334,10 +369,11 @@ async def _camera_ws_handler(websocket: WebSocket):
     except WebSocketDisconnect:
         pass
     except Exception as e:
+        logger.exception("Unhandled error in camera websocket handler")
         try:
             await websocket.send_json({"type": "error", "message": str(e)})
-        except:
-            pass
+        except Exception:
+            logger.debug("Could not send error to client; socket likely already closed")
     finally:
         if mp_extractor is not None:
             mp_extractor.close()

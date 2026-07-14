@@ -146,12 +146,17 @@ def _repair_foreign_key_rows() -> None:
         )
 
         # Remove child rows whose parent patient is already gone so FK enforcement can remain strict.
+        # Table names are never taken from external input; this whitelist is
+        # the only thing ever interpolated into the DELETE below.
+        _CHILD_TABLES_WITH_PATIENT_FK = frozenset({"labresults", "doctornotes", "testresults"})
         for table_name in ("labresults", "doctornotes", "testresults"):
             if table_name not in tables:
                 continue
+            if table_name not in _CHILD_TABLES_WITH_PATIENT_FK:
+                raise ValueError(f"Refusing to run DELETE against unexpected table {table_name!r}")
             connection.execute(
                 text(
-                    f"DELETE FROM {table_name} "
+                    f"DELETE FROM {table_name} "  # nosec: table_name is whitelist-checked above, not user input
                     "WHERE patient_id NOT IN (SELECT patient_id FROM patients)"
                 )
             )
@@ -279,39 +284,6 @@ def _validate(data: Dict[str, Any]) -> Dict[str, str]:
             errors["severity"] = "Severity must be low, medium, high, or Stage 1-5"
 
     return errors
-
-_TEST_NAME_ALIASES = {
-    "stand-and-sit": "stand-and-sit",
-    "stand-sit": "stand-and-sit",
-    "stand_to_sit": "stand-and-sit",
-    "stand-and-sit-assessment": "stand-and-sit",
-    "stand-and-sit-test": "stand-and-sit",
-    "stand-&-sit": "stand-and-sit",
-    "stand-&-sit-assessment": "stand-and-sit",
-    "stand-and-sit-evaluation": "stand-and-sit",
-    "finger-tapping": "finger-tapping",
-    "finger_tapping": "finger-tapping",
-    "finger-taping": "finger-tapping",
-    "finger-tapping-test": "finger-tapping",
-    "finger-tapping-assessment": "finger-tapping",
-    "finger-tap": "finger-tapping",
-    "fist-open-close": "fist-open-close",
-    "fist_open_close": "fist-open-close",
-    "fist-open-close-test": "fist-open-close",
-    "fist-open-close-assessment": "fist-open-close",
-    "palm-open": "fist-open-close",
-    "palm_open": "fist-open-close",
-}
-
-
-def _normalize_test_name(value: Optional[str]) -> str:
-    normalized = (value or "").strip().lower()
-    if not normalized:
-        return "unknown"
-    normalized = normalized.replace(" ", "-").replace("_", "-").replace("&", "and")
-    while "--" in normalized:
-        normalized = normalized.replace("--", "-")
-    return _TEST_NAME_ALIASES.get(normalized, normalized)
 
 
 def normalize_severity(value: str) -> str:
@@ -703,29 +675,26 @@ def update_patient_info(patient_id: str, updated_data: PatientUpdate) -> Dict[st
     with SessionLocal() as session:
         prepo = PatientRepository(session)
 
-        dbp = prepo.get(patient_id)
-        if not dbp:
+        if prepo.get(patient_id) is None:
             return {"success": False, "error": "Patient not found"}
 
-        # --- Patch basic Patient columns ---
+        # Translate API field names/values to Patient column values, then let
+        # the repository apply them through its allowlisted update().
+        patch: Dict[str, Any] = {}
         if "name" in data:
-            dbp.name = data["name"]
-
+            patch["name"] = data["name"]
         if "birthDate" in data:
-            dbp.dob = data["birthDate"]
-
+            patch["dob"] = data["birthDate"]
         if "height" in data:
             h = _parse_number(data["height"], 0, 300)
-            dbp.height = int(h) if h is not None else None
-
+            patch["height"] = int(h) if h is not None else None
         if "weight" in data:
             w = _parse_number(data["weight"], 0, 500)
-            dbp.weight = int(w) if w is not None else None
-
+            patch["weight"] = int(w) if w is not None else None
         if "severity" in data:
-            dbp.severity = normalize_severity(data["severity"])
+            patch["severity"] = normalize_severity(data["severity"])
 
-        session.commit()
+        prepo.update(patient_id, patch)
         return {"success": True, "patient_id": patient_id}
 
 
@@ -853,8 +822,3 @@ async def async_filter_patients(criteria: Dict[str, Any]) -> Dict[str, Any]:
 async def async_import_patients_csv_text(csv_text: str) -> Dict[str, Any]:
     async with _async_lock:
         return import_patients_csv_text(csv_text)
-
-
-
-    def get_all_tests(self):
-        return self.data

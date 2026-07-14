@@ -129,3 +129,8 @@ class LSTMCNNInferenceService:
 
 
 inference_service = LSTMCNNInferenceService()
+
+
+def get_inference_service() -> LSTMCNNInferenceService:
+    """FastAPI dependency provider; lets routes/tests override the singleton."""
+    return inference_service

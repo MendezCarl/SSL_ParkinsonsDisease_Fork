@@ -2,10 +2,9 @@ from fastapi import FastAPI, HTTPException, Query, UploadFile, File, Form, Body,
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from typing import Any, Dict, List, Optional, Annotated
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import logging
 import os
-import shutil
 import uvicorn
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -13,9 +12,10 @@ from routes.dtw_rest import router as dtw_router
 from routes.patient import router as patient_router
 from routes.websockets import router as ws_router
 from routes.classifier import router as classifier_router
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from routes.anomaly import router as anomaly_router, worker_router as anomaly_worker_router
+from schema.anomaly_schema import AnomalyReport
+from fastapi.security import OAuth2PasswordRequestForm
 from repo.sql_models import User
-from patient_manager import SessionLocal
 from storage_paths import RECORDINGS_DIR
 from routes.utils_dtw import generate_session_id, normalize_test_name
 from services.recording_service import resolve_recording_path, save_uploaded_video
@@ -25,24 +25,13 @@ from services.test_history_service import (
     get_patient_tests as load_patient_tests,
     patient_exists,
 )
-
-try:
-    import jwt
-    from jwt import InvalidTokenError
-except ModuleNotFoundError:  # pragma: no cover - exercised in minimal test environments
-    try:
-        from jose import jwt
-        from jose import JWTError as InvalidTokenError
-    except ModuleNotFoundError:  # pragma: no cover - exercised in minimal test environments
-        jwt = None
-
-        class InvalidTokenError(Exception):
-            pass
-
-try:
-    from passlib.context import CryptContext
-except ModuleNotFoundError:  # pragma: no cover - exercised in minimal test environments
-    CryptContext = None
+from auth import (
+    authenticate,
+    create_access_token,
+    ensure_demo_user,
+    get_current_user,
+    get_current_user_from_header_or_query,
+)
 
 # ============ Paths / Folders ============
 RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
@@ -68,6 +57,8 @@ app.include_router(dtw_router)
 app.include_router(patient_router)
 app.include_router(ws_router)
 app.include_router(classifier_router)
+app.include_router(anomaly_router)
+app.include_router(anomaly_worker_router)
 
 # ============ CORS ============
 app.add_middleware(
@@ -90,25 +81,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-SECRET_KEY = "stupid_hash_for_now"
-ALGO = "HS256"
-ACCESS_MIN = 30
-_FALLBACK_TOKEN_PREFIX = "dev-token:"
-
-if CryptContext is None:
-    class _FallbackPasswordContext:
-        def hash(self, value: str) -> str:
-            return value
-
-        def verify(self, plain: str, hashed: str) -> bool:
-            return plain == hashed
-
-    pwd = _FallbackPasswordContext()
-else:
-    pwd = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
-
 
 class CurrentUserResponse(BaseModel):
     username: str
@@ -170,6 +142,7 @@ class PersistedMlPredictionSnapshot(BaseModel):
 class TestAnalysisSnapshot(BaseModel):
     dtw_metrics: PersistedDtwAnalysisSnapshot | None = None
     ml_prediction: PersistedMlPredictionSnapshot | None = None
+    anomaly_report: AnomalyReport | None = None
 
 
 class PatientTestHistoryEntry(BaseModel):
@@ -230,22 +203,7 @@ class VideoListResponse(BaseModel):
 
 
 _VIDEO_EXTENSIONS = (".mov", ".mp4", ".webm", ".avi", ".mkv")
-
-
-def _password_matches(plain: str, stored: str) -> bool:
-    try:
-        return pwd.verify(plain, stored)
-    except Exception:
-        return plain == stored
-
-
-def _should_rehash_password(stored: str) -> bool:
-    if CryptContext is None:
-        return False
-    try:
-        return pwd.needs_update(stored)
-    except Exception:
-        return True
+MAX_UPLOAD_BYTES = 500 * 1024 * 1024  # 500 MB; clinical test recordings are short
 
 
 def serialize_user(user: User) -> CurrentUserResponse:
@@ -285,81 +243,9 @@ def normalize_test_history_entry(raw: Dict[str, Any]) -> PatientTestHistoryEntry
     )
 
 
-def ensure_demo_user() -> None:
-    demo_username = "doctor@hospital.com"
-    demo_password = "Demo123!"
-    try:
-        with SessionLocal() as session:
-            existing = session.query(User).filter(
-                (User.username == demo_username) | (User.email == demo_username)
-            ).first()
-            if existing:
-                if not _password_matches(demo_password, existing.hashed_password) or _should_rehash_password(existing.hashed_password):
-                    existing.hashed_password = pwd.hash(demo_password)
-                    session.commit()
-                return
-
-            session.add(
-                User(
-                    username=demo_username,
-                    full_name="Demo Doctor",
-                    email=demo_username,
-                    hashed_password=pwd.hash(demo_password),
-                    location="Demo Clinic",
-                    title="Neurologist",
-                    speciality="Movement Disorders",
-                )
-            )
-            session.commit()
-    except Exception:
-        # Keep app importable for docs/OpenAPI even when the optional bcrypt backend is unavailable.
-        return
-
-
 ensure_demo_user()
 
-def authenticate(username: str, password: str) -> User | None:
-    try:
-        with SessionLocal() as session:
-            user = session.query(User).filter(
-                (User.username == username) | (User.email == username)
-            ).first()
-            if user and _password_matches(password, user.hashed_password):
-                if _should_rehash_password(user.hashed_password):
-                    user.hashed_password = pwd.hash(password)
-                    session.commit()
-                return user
-    except Exception:
-        return None
-    
-def create_access_token(sub: str) -> str:
-    if jwt is None:
-        return f"{_FALLBACK_TOKEN_PREFIX}{sub}"
-    to_encode = {
-        "sub": sub, 
-        "exp": datetime.now(timezone.utc) + timedelta(minutes=ACCESS_MIN)
-    }
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGO)
 
-async def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
-    if jwt is None:
-        if not token.startswith(_FALLBACK_TOKEN_PREFIX):
-            raise HTTPException(status_code=401, detail="Invalid authentication credentials")
-        username = token.removeprefix(_FALLBACK_TOKEN_PREFIX)
-    else:
-        try:
-            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGO])
-            username = payload.get("sub")
-            if username is None:
-                raise HTTPException(status_code=401, detail="Invalid authentication credentials")
-        except InvalidTokenError:
-            raise HTTPException(status_code=401, detail="Invalid authentication credentials")
-    with SessionLocal() as session:
-        user = session.query(User).filter_by(username=username).first()
-        if user is None:
-            raise HTTPException(status_code=401, detail="Invalid authentication credentials")
-        return user
-    
 @app.post("/token", response_model=TokenResponse, tags=["auth"], summary="Create a bearer token")
 async def login(form: OAuth2PasswordRequestForm = Depends()):
     user = authenticate(form.username, form.password)
@@ -389,7 +275,7 @@ async def health_check():
     tags=["test-history"],
     summary="Get stored test history for a patient",
 )
-async def get_patient_tests(patient_id: str):
+async def get_patient_tests(patient_id: str, current_user: User = Depends(get_current_user)):
     tests = load_patient_tests(patient_id)
     return {"success": True, "tests": [normalize_test_history_entry(test) for test in tests]}
 
@@ -399,7 +285,11 @@ async def get_patient_tests(patient_id: str):
     tags=["test-history"],
     summary="Add a test history record for a patient",
 )
-async def add_patient_test(patient_id: str, test_data: PatientTestHistoryEntry = Body(...)):
+async def add_patient_test(
+    patient_id: str,
+    test_data: PatientTestHistoryEntry = Body(...),
+    current_user: User = Depends(get_current_user),
+):
     if not patient_exists(patient_id):
         raise HTTPException(status_code=404, detail="Patient not found")
     payload = test_data.model_dump(exclude_none=True)
@@ -421,10 +311,13 @@ async def add_patient_test(patient_id: str, test_data: PatientTestHistoryEntry =
 async def upload_video(
     patient_id: str = Form(...),
     test_name: str = Form(...),
-    video: UploadFile = File(...)
+    video: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
 ):
     if not patient_exists(patient_id):
         raise HTTPException(status_code=404, detail="Patient not found")
+    if video.size is not None and video.size > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Video exceeds maximum upload size")
     try:
         session_id = generate_session_id()
         filename = save_uploaded_video(
@@ -463,7 +356,7 @@ async def upload_video(
     tags=["recordings"],
     summary="List saved recordings for a patient and test",
 )
-def list_videos(patient_id: str, test_name: str):
+def list_videos(patient_id: str, test_name: str, current_user: User = Depends(get_current_user)):
     try:
         normalized_target = normalize_test_name(test_name)
         seen: set[str] = set()
@@ -503,7 +396,7 @@ def list_videos(patient_id: str, test_name: str):
         return {"success": False, "error": "Failed to list videos"}
 
 @app.get("/recordings/{filename}", response_class=FileResponse)
-def get_recording_file(filename: str):
+def get_recording_file(filename: str, current_user: User = Depends(get_current_user_from_header_or_query)):
     base_dir = os.path.realpath(str(RECORDINGS_DIR))
     file_path = os.path.realpath(os.path.join(base_dir, filename))
     if os.path.basename(file_path) != filename:

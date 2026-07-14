@@ -1,4 +1,5 @@
 import { AVAILABLE_TESTS, Patient, Test, TestIndicator, LabResultEntry, DoctorNoteEntry, TestAnalysisSnapshot } from '@/types/patient';
+import { getRecordingUrl } from '@/services/dtw';
 
 type TestType = Test['type'];
 type TestStatus = Test['status'];
@@ -298,9 +299,11 @@ const resolveRecordingPaths = (recordingUrl?: string | null, recordingFile?: str
       absolute = `${apiBaseUrl}${relative}`;
     }
   } else if (recordingFile) {
-    const sanitized = recordingFile.replace(/^\/+/, '');
+    const sanitized = recordingFile.replace(/^\/+/, '').replace(/^recordings\//, '');
     relative = `/recordings/${sanitized}`;
-    absolute = `${apiBaseUrl}${relative}`;
+    // Delegates to the shared helper so the auth token (required by the
+    // recordings endpoint) is attached the same way everywhere.
+    absolute = getRecordingUrl(sanitized);
   }
 
   return { relative, absolute };

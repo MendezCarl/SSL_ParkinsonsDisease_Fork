@@ -1,12 +1,13 @@
 # backend/routes/dtw_rest.py
 from __future__ import annotations
-from typing import List, Dict, Any, Tuple, Optional
-import numpy as np
-from fastapi import APIRouter, HTTPException, Query
+from typing import List, Dict, Any
+from fastapi import APIRouter, Query, Depends
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from services.dtw_service import DTW_BASE, dtw_service
 
-router = APIRouter(prefix="/dtw", tags=["dtw"])
+from auth import get_current_user
+from services.dtw_service import DTW_BASE, DtwService, get_dtw_service
+
+router = APIRouter(prefix="/dtw", tags=["dtw"], dependencies=[Depends(get_current_user)])
 DTW_BASE.mkdir(parents=True, exist_ok=True)
 
 print(f"[DTW REST] DTW_BASE = {DTW_BASE}")
@@ -128,84 +129,33 @@ class LabelSessionResponse(BaseModel):
     patient_updated: bool
     patient_update_error: str | None = None
 
-def _test_dir(test_name: str) -> Path:
-    p = DTW_BASE / test_name
-    if not p.is_dir():
-        raise HTTPException(404, f"Unknown test '{test_name}' at {p}")
-    return p
-
-def _session_dir(test_name: str, session_id: str) -> Path:
-    p = _test_dir(test_name) / session_id
-    if not p.is_dir():
-        raise HTTPException(404, f"Session '{session_id}' not found under {p.parent}")
-    return p
-
-# --- add these helpers anywhere above the endpoint (e.g., near other helpers) ---
-def _apply_reduce(arr: np.ndarray, how: str) -> np.ndarray:
-    how = (how or "mean").lower()
-    if how == "mean":
-        return arr.mean(axis=1)
-    if how == "median":
-        return np.median(arr, axis=1)
-    if how == "sum":
-        return arr.sum(axis=1)
-    if how == "min":
-        return arr.min(axis=1)
-    if how == "max":
-        return arr.max(axis=1)
-    if how == "pca1":
-        centered = arr - arr.mean(axis=0, keepdims=True)
-        _, _, vh = np.linalg.svd(centered, full_matrices=False)
-        return centered @ vh[0]
-    raise HTTPException(400, f"Unsupported reduce='{how}' (use mean|median|sum|min|max|pca1)")
-
-def _parse_landmarks_param(landmarks: str | None, model: str, points: int) -> list[int]:
-    """
-    Accepts:
-      - None or "all": all landmarks (0..points-1)
-      - CSV like "1,2,3" (0-based indices for pose 0..32; hands 0..20)
-    Returns 0-based positions inside the flattened feature vector.
-    """
-    if landmarks is None or str(landmarks).lower() == "all":
-        return list(range(points))
-
-    raw = [s.strip() for s in str(landmarks).split(",") if s.strip() != ""]
-    try:
-        req = [int(s) for s in raw]
-    except ValueError:
-        raise HTTPException(400, f"Invalid landmarks list '{landmarks}'. Use 'all' or CSV of integers.")
-
-    for lm in req:
-        if not (0 <= lm < points):
-            raise HTTPException(400, f"landmark {lm} out of range 0..{points-1} for model {model}")
-    return req
-
-
 @router.get("/health", response_model=DtwHealthResponse, summary="DTW service health")
-def health() -> DtwHealthResponse:
-    return dtw_service.health()
+def health(svc: DtwService = Depends(get_dtw_service)) -> DtwHealthResponse:
+    return svc.health()
 
 @router.get("/diag", response_model=DtwDiagResponse, summary="DTW storage diagnostics")
-def diag() -> DtwDiagResponse:
-    return dtw_service.diag()
+def diag(svc: DtwService = Depends(get_dtw_service)) -> DtwDiagResponse:
+    return svc.diag()
 
 @router.get("/tests", response_model=List[str])
-def list_tests() -> List[str]:
-    return dtw_service.list_tests()
+def list_tests(svc: DtwService = Depends(get_dtw_service)) -> List[str]:
+    return svc.list_tests()
 
 @router.get("/sessions/lookup/{session_id}", response_model=DtwSessionLookupResponse, summary="Resolve a DTW session id to its test")
 def lookup_session(
     session_id: str,
     patient_id: str | None = Query(None, description="Optional patient scope for session lookup"),
+    svc: DtwService = Depends(get_dtw_service),
 ) -> DtwSessionLookupResponse:
-    return dtw_service.lookup_session(session_id, patient_id)
+    return svc.lookup_session(session_id, patient_id)
 
 @router.get("/sessions/{test_name}", response_model=List[DtwSessionMetaResponse], summary="List saved DTW sessions for a test")
 def list_sessions(
     test_name: str,
     patient_id: str | None = Query(None, description="Optional patient scope for session listing"),
+    svc: DtwService = Depends(get_dtw_service),
 ) -> List[DtwSessionMetaResponse]:
-    return dtw_service.list_sessions(test_name, patient_id)
+    return svc.list_sessions(test_name, patient_id)
 
 @router.get(
     "/sessions/{test_name}/{session_id}/series",
@@ -215,45 +165,22 @@ def list_sessions(
 def get_series(
     test_name: str,
     session_id: str,
-    max_points: int = Query(200, ge=50, le=2000)
+    max_points: int = Query(200, ge=50, le=2000),
+    svc: DtwService = Depends(get_dtw_service),
 ) -> Dict[str, Any]:
-    return dtw_service.get_series(test_name, session_id, max_points)
+    return svc.get_series(test_name, session_id, max_points)
 
 @router.get(
     "/sessions/{test_name}/{session_id}/download",
     response_model=DtwDownloadResponse,
     summary="Get file paths for saved DTW artifacts",
 )
-def download_paths(test_name: str, session_id: str) -> DtwDownloadResponse:
-    return dtw_service.download_paths(test_name, session_id)
-
-def _infer_points_and_kpp(D: int, model: str) -> Tuple[int, int]:
-    """
-    Infer (#points, dims-per-point) from feature dimension D and model.
-    - pose: 33 points
-    - hands: 21 points (full Mediapipe hand)
-    """
-    model = (model or "").lower()
-    if model == "pose":
-        points = 33
-        if D % points != 0:
-            raise HTTPException(500, f"Template dimension {D} not divisible by pose points {points}")
-        return points, D // points
-
-    if model == "hands":
-        points = 21
-        if D % points != 0:
-            raise HTTPException(500, f"Template dimension {D} not divisible by hands points {points}")
-        return points, D // points
-
-    raise HTTPException(500, f"Unknown model '{model}' in meta.json")
-
-def _downsample_xy(x: np.ndarray, y: np.ndarray, kmax: int) -> Tuple[List[int], List[float]]:
-    n = int(len(x))
-    if n <= kmax:
-        return x.astype(int).tolist(), y.astype(float).tolist()
-    step = max(1, n // kmax)
-    return x[::step].astype(int).tolist(), y[::step].astype(float).tolist()
+def download_paths(
+    test_name: str,
+    session_id: str,
+    svc: DtwService = Depends(get_dtw_service),
+) -> DtwDownloadResponse:
+    return svc.download_paths(test_name, session_id)
 
 @router.get(
     "/sessions/{test_name}/{session_id}/channel",
@@ -266,10 +193,11 @@ def get_channel_series(
     landmark: int = Query(0, ge=0, description="0..20 for hands; 0..32 for pose"),
     axis: str = Query("x", pattern="^(x|y|z)$"),
     max_points: int = Query(400, ge=50, le=3000),
+    svc: DtwService = Depends(get_dtw_service),
 ) -> Dict[str, Any]:
-    return dtw_service.get_channel_series(test_name, session_id, landmark, axis, max_points)
+    return svc.get_channel_series(test_name, session_id, landmark, axis, max_points)
 
-   
+
 # --- Aggregate one axis across many (or all) landmarks into a 1D series ---
 @router.get(
     "/sessions/{test_name}/{session_id}/axis_agg",
@@ -286,8 +214,9 @@ def get_axis_aggregate(
     ),
     reduce: str = Query("mean", description="Aggregation over selected landmarks per frame: mean|median|sum|min|max"),
     max_points: int = Query(600, ge=50, le=5000),
+    svc: DtwService = Depends(get_dtw_service),
 ) -> Dict[str, Any]:
-    return dtw_service.get_axis_aggregate(test_name, session_id, axis, landmarks, reduce, max_points)
+    return svc.get_axis_aggregate(test_name, session_id, axis, landmarks, reduce, max_points)
 
 # ─────────────────────────── Doctor label endpoint ───────────────────────────
 
@@ -334,8 +263,9 @@ async def label_session(
     test_name: str,
     session_id: str,
     body: LabelSessionRequest,
+    svc: DtwService = Depends(get_dtw_service),
 ) -> LabelSessionResponse:
-    return await dtw_service.label_session(
+    return await svc.label_session(
         test_name,
         session_id,
         body.confirmed_stage,

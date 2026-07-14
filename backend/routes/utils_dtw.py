@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 from tslearn.metrics import dtw_path
-from schema.keypoint_contracts import EXPECTED_LANDMARKS, primary_landmarks
+from dtw_models import get_dtw_model
 from storage_paths import DTW_RUNS_DIR, TEMPLATES_DIR
 
 # ================== BASE PATHS ==================
@@ -125,63 +125,11 @@ class TemplateLibrary:
         )
 
 # ================== FEATURE EXTRACTION ==================
-#Should either be positional scaled or statistically scaled
-def _hands_features(kp: Dict) -> Optional[np.ndarray]:
-    """
-    Use ALL Mediapipe hand landmarks (21).
-    - Origin: wrist (id 0)
-    - Scale: distance wrist->middle MCP (id 9)
-    - Output: flattened 42D vector (21*2)
-    """
-    lm = primary_landmarks(kp, "hand")
-    if not lm or len(lm) < EXPECTED_LANDMARKS["hands"]:
-        return None
-
-    pts = np.array([[p["x"], p["y"]] for p in lm], dtype=np.float32)  # (21,2)
-    ref = pts[0]                                  # wrist
-    rel = pts - ref                               # translation-invariant
-    scale = np.linalg.norm(pts[9] - ref) + 1e-6   # wrist->middle MCP
-    return (rel / scale).reshape(-1)              # (42,)
-
-def _pose_features(kp: Dict, use_z: bool = False) -> Optional[np.ndarray]:
-    pose = primary_landmarks(kp, "pose")
-    if not pose or len(pose) < EXPECTED_LANDMARKS["pose"]:
-        return None
-    if use_z:
-        pts = np.array([[p["x"], p["y"], p.get("z", 0.0)] for p in pose], dtype=np.float32)  # (33,3)
-        mid_hips = (pts[23] + pts[24]) / 2.0
-        rel = pts - mid_hips
-        shoulder_w = np.linalg.norm(pts[11] - pts[12]) + 1e-6
-        return (rel / shoulder_w).reshape(-1)  # (99,)
-    else:
-        pts = np.array([[p["x"], p["y"]] for p in pose], dtype=np.float32)  # (33,2)
-        mid_hips = (pts[23] + pts[24]) / 2.0
-        rel = pts - mid_hips
-        shoulder_w = np.linalg.norm(pts[11] - pts[12]) + 1e-6
-        return (rel / shoulder_w).reshape(-1)  # (66,)
-
-def _select_finger_features(kp_array: np.ndarray) -> np.ndarray:
-    """Select only finger-related features from hand keypoints array."""
-    # Hand landmarks indices for fingers (excluding wrist)
-    finger_indices = [
-       3, 4,    # Thumb
-         7, 8,    # Index
-    ]
-    selected = []
-    for idx in finger_indices:
-        selected.extend([kp_array[idx * 2], kp_array[idx * 2 + 1]])  # x and y
-    return np.array(selected, dtype=np.float32)
-
 def extract_features(model: str, kp: Dict, use_z: bool = False) -> Optional[np.ndarray]:
-    if model == "hands":
-        return _hands_features(kp)
-    if model == "pose":
-        return _pose_features(kp, use_z=use_z)
-    if model == "finger":
-        kp = _hands_features(kp)
-        kp = _select_finger_features(kp)
-        return kp
-    return None
+    strategy = get_dtw_model(model)
+    if strategy is None:
+        return None
+    return strategy.extract(kp, use_z=use_z)
 
 #================== AMPLITUDE AND SPEED CALCULATION ==================
 def calculate_amplitude(X: np.ndarray) -> np.ndarray:

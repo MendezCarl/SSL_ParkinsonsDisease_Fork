@@ -190,6 +190,7 @@ def persist_session_analysis(
     *,
     dtw_metrics: Dict[str, Any] | None = None,
     ml_prediction: Dict[str, Any] | None = None,
+    anomaly_report: Dict[str, Any] | None = None,
 ) -> bool:
     scoped_session_id = (session_id or "").strip()
     if not scoped_session_id:
@@ -230,6 +231,11 @@ def persist_session_analysis(
                 pruned_prediction = _prune_none(dict(ml_prediction))
                 existing_prediction = analysis.get("ml_prediction") if isinstance(analysis.get("ml_prediction"), dict) else {}
                 analysis["ml_prediction"] = _merge_dict(existing_prediction, pruned_prediction)
+
+            if anomaly_report:
+                pruned_report = _prune_none(dict(anomaly_report))
+                existing_report = analysis.get("anomaly_report") if isinstance(analysis.get("anomaly_report"), dict) else {}
+                analysis["anomaly_report"] = _merge_dict(existing_report, pruned_report)
 
             row.extra = extra
             changed = True

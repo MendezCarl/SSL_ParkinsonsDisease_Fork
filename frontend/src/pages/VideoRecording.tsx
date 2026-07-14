@@ -13,6 +13,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
+import { getStoredAuthToken } from "@/auth/auth-session";
 import { AVAILABLE_TESTS } from "@/types/patient";
 import {
   EXPECTED_LANDMARKS,
@@ -43,6 +44,10 @@ const WS_PATH = "/ws/camera";
 const wsURL = () => {
   const url = new URL(WS_PATH, window.location.origin);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  const token = getStoredAuthToken();
+  if (token) {
+    url.searchParams.set("token", token);
+  }
   return url.toString();
 };
 

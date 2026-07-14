@@ -17,6 +17,7 @@ if str(BACKEND_DIR) not in sys.path:
 import main
 import routes.websockets as ws_routes
 import services.recording_service as recording_service
+from auth import get_current_user, get_current_user_from_header_or_query
 from main import app
 from schema.keypoint_contracts import build_hand_payload
 
@@ -39,6 +40,11 @@ def _patient_create_payload(name: str, severity: str = "Stage 2") -> dict:
 
 
 def test_phase6_system_and_auth_smoke():
+    # This test exercises the real login -> /me flow, so it needs the actual
+    # auth dependency rather than the fake-user override conftest applies by default.
+    app.dependency_overrides.pop(get_current_user, None)
+    app.dependency_overrides.pop(get_current_user_from_header_or_query, None)
+
     client = TestClient(app)
 
     root = client.get("/")
@@ -264,7 +270,7 @@ def test_phase6_websocket_recording_flow(monkeypatch, tmp_path):
     patient_id = create_response.json()["patient_id"]
 
     try:
-        with client.websocket_connect("/ws/camera") as websocket:
+        with client.websocket_connect("/ws/camera?token=test-token") as websocket:
             websocket.send_json(
                 {
                     "type": "init",

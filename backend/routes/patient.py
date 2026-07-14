@@ -1,6 +1,6 @@
 import logging
 
-from fastapi import APIRouter, Query, HTTPException, UploadFile, File
+from fastapi import APIRouter, Query, HTTPException, UploadFile, File, Depends
 
 from typing import List, Optional, Dict, Any, Union
 from pydantic import BaseModel, Field, field_validator
@@ -8,6 +8,8 @@ import json, re
 from datetime import datetime, date
 from pydantic import ConfigDict  # v2
 
+from auth import get_current_user
+from repo.sql_models import User
 from services import patient_service
 
 from routes.contracts import (
@@ -20,8 +22,10 @@ from routes.contracts import (
 _num = re.compile(r"(\d+\.?\d*)")
 # Accept low/medium/high OR Stage 1..5
 
+MAX_CSV_BYTES = 5 * 1024 * 1024  # 5 MB is generous for a patient roster CSV
 
-router = APIRouter(prefix="/patients")
+
+router = APIRouter(prefix="/patients", dependencies=[Depends(get_current_user)])
 logger = logging.getLogger(__name__)
 
 
@@ -60,9 +64,13 @@ async def import_patients_csv(file: UploadFile = File(...)):
     filename = (file.filename or "").lower()
     if not filename.endswith(".csv"):
         raise HTTPException(status_code=400, detail="Please upload a CSV file")
+    if file.size is not None and file.size > MAX_CSV_BYTES:
+        raise HTTPException(status_code=413, detail="CSV file exceeds maximum upload size")
 
     try:
         contents = await file.read()
+        if len(contents) > MAX_CSV_BYTES:
+            raise HTTPException(status_code=413, detail="CSV file exceeds maximum upload size")
         csv_text = contents.decode("utf-8-sig")
     except UnicodeDecodeError as exc:
         raise HTTPException(status_code=400, detail=f"CSV must be UTF-8 encoded: {exc}") from exc

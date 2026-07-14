@@ -76,6 +76,25 @@ class DoctorNote(Base):
     added_by: Mapped[Optional[str]] = mapped_column(String(255))
     patient: Mapped["Patient"] = relationship(back_populates="doctornotes")
 
+class AnomalyJob(Base):
+    __tablename__ = "anomaly_jobs"
+    __table_args__ = (
+        Index("ix_anomaly_jobs_status", "status"),
+        Index("ix_anomaly_jobs_session_id", "session_id"),
+    )
+
+    job_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    patient_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    test_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    session_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    recording_file: Mapped[str] = mapped_column(String(512), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    created_utc: Mapped[str] = mapped_column(String(40), nullable=False)
+    updated_utc: Mapped[str] = mapped_column(String(40), nullable=False)
+    result_path: Mapped[Optional[str]] = mapped_column(String(512))
+    error_message: Mapped[Optional[str]] = mapped_column(Text)
+
+
 class TestResult(Base):
     __tablename__ = "testresults"
     __table_args__ = (

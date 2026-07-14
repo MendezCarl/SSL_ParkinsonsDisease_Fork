@@ -1,8 +1,6 @@
 import { getStoredAuthToken } from '@/auth/auth-session';
+import { API_BASE_URL, apiClient } from '@/services/client';
 import type { ServiceResponse } from '@/services/service-response';
-
-const API_BASE =
-  (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? '/api';
 
 export type DtwSessionMeta = {
   session_id: string;
@@ -82,46 +80,16 @@ type RequestOptions = Omit<RequestInit, 'headers'> & {
   signal?: AbortSignal;
 };
 
-async function requestJSON<T>(path: string, options: RequestOptions = {}): Promise<ServiceResponse<T>> {
-  try {
-    const token = getStoredAuthToken();
-    const response = await fetch(`${API_BASE}${path}`, {
-      ...options,
-      headers: {
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...options.headers,
-      },
-    });
-
-    const text = await response.text();
-
-    if (!response.ok) {
-      let parsed: { detail?: string; message?: string } | null = null;
-      try {
-        parsed = JSON.parse(text) as { detail?: string; message?: string };
-      } catch {
-        parsed = null;
-      }
-      return {
-        success: false,
-        error: parsed?.detail || parsed?.message || text || `HTTP ${response.status}`,
-      };
-    }
-
-    return {
-      success: true,
-      data: text ? (JSON.parse(text) as T) : ({} as T),
-    };
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : 'Unknown error occurred',
-    };
-  }
+function requestJSON<T>(path: string, options: RequestOptions = {}): Promise<ServiceResponse<T>> {
+  return apiClient.request<T>(path, options);
 }
 
 export function getRecordingUrl(filename: string): string {
-  return `${API_BASE}/recordings/${encodeURIComponent(filename)}`;
+  // Native <video> elements can't send an Authorization header, so the
+  // recordings endpoint also accepts the bearer token as a query param.
+  const token = getStoredAuthToken();
+  const query = token ? `?token=${encodeURIComponent(token)}` : '';
+  return `${API_BASE_URL}/recordings/${encodeURIComponent(filename)}${query}`;
 }
 
 export async function lookupDtwSession(

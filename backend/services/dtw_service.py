@@ -7,13 +7,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import logging
+
 import numpy as np
 from fastapi import HTTPException
 
+from dtw_models import points_for_model
 from routes.utils_dtw import ALLOWED_TESTS, EndOnlyDTW, generate_session_id, normalize_test_name
 from services import patient_service
 from services.test_history_service import get_patient_tests as load_patient_tests, persist_session_analysis
 from storage_paths import DTW_RUNS_DIR, LABELLED_TRAINING_DATA_DIR
+
+logger = logging.getLogger(__name__)
 
 
 DTW_BASE = DTW_RUNS_DIR
@@ -64,20 +69,12 @@ def _parse_landmarks_param(landmarks: str | None, model: str, points: int) -> li
 
 
 def _infer_points_and_kpp(dimensions: int, model: str) -> Tuple[int, int]:
-    model = (model or "").lower()
-    if model == "pose":
-        points = 33
-        if dimensions % points != 0:
-            raise HTTPException(500, f"Template dimension {dimensions} not divisible by pose points {points}")
-        return points, dimensions // points
-
-    if model == "hands":
-        points = 21
-        if dimensions % points != 0:
-            raise HTTPException(500, f"Template dimension {dimensions} not divisible by hands points {points}")
-        return points, dimensions // points
-
-    raise HTTPException(500, f"Unknown model '{model}' in meta.json")
+    points = points_for_model(model)
+    if points is None:
+        raise HTTPException(500, f"Unknown model '{model}' in meta.json")
+    if dimensions % points != 0:
+        raise HTTPException(500, f"Template dimension {dimensions} not divisible by {model} points {points}")
+    return points, dimensions // points
 
 
 def _downsample_xy(x: np.ndarray, y: np.ndarray, max_points: int) -> Tuple[List[int], List[float]]:
@@ -422,19 +419,14 @@ class DtwService:
             },
         }
 
-    async def label_session(
+    def _write_doctor_label(
         self,
-        test_name: str,
-        session_id: str,
+        session_dir: Path,
+        meta: Dict[str, Any],
         confirmed_stage: int,
-        patient_id: str | None,
         notes: str | None,
     ) -> Dict[str, Any]:
-        session_dir, meta = self._resolve_session_dir_and_meta(test_name, session_id)
         meta_path = _safe_path_join(session_dir, "meta.json")
-        canonical_session_id = self._canonical_session_id(session_dir, meta)
-        canonical_test_name = self._canonical_test_name(test_name)
-
         meta["doctor_confirmed_stage"] = confirmed_stage
         meta["doctor_label_utc"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         if notes:
@@ -444,7 +436,15 @@ class DtwService:
         was_corrected = ml_stage is not None and int(ml_stage) != confirmed_stage
         meta["label_source"] = "doctor_correction" if was_corrected else "doctor_confirmed"
         meta_path.write_text(json.dumps(meta, indent=2))
+        return meta
 
+    def _copy_to_labelled_training_data(
+        self,
+        session_dir: Path,
+        canonical_test_name: str,
+        confirmed_stage: int,
+        canonical_session_id: str,
+    ) -> Path:
         training_dir = _safe_path_join(
             LABELLED_TRAINING_DATA_DIR,
             canonical_test_name,
@@ -456,28 +456,46 @@ class DtwService:
             dst = _safe_path_join(training_dir, src.name)
             if not dst.exists():
                 shutil.copy2(src, dst)
+        return training_dir
+
+    async def _update_patient_severity(
+        self, patient_id: str, confirmed_stage: int
+    ) -> Tuple[bool, str | None]:
+        try:
+            from schema.patient_contracts import PatientUpdate
+
+            result = await patient_service.update_patient(
+                patient_id,
+                PatientUpdate(severity=f"Stage {confirmed_stage}"),
+            )
+            return bool(result.get("success", False)), None
+        except Exception:
+            logger.exception("Failed to update patient %s severity after doctor label", patient_id)
+            return False, "Failed to update patient severity"
+
+    async def label_session(
+        self,
+        test_name: str,
+        session_id: str,
+        confirmed_stage: int,
+        patient_id: str | None,
+        notes: str | None,
+    ) -> Dict[str, Any]:
+        session_dir, meta = self._resolve_session_dir_and_meta(test_name, session_id)
+        canonical_session_id = self._canonical_session_id(session_dir, meta)
+        canonical_test_name = self._canonical_test_name(test_name)
+
+        meta = self._write_doctor_label(session_dir, meta, confirmed_stage, notes)
+        training_dir = self._copy_to_labelled_training_data(
+            session_dir, canonical_test_name, confirmed_stage, canonical_session_id
+        )
 
         patient_updated = False
+        patient_update_error = None
         if patient_id:
-            try:
-                from schema.patient_contracts import PatientUpdate
-
-                severity_str = f"Stage {confirmed_stage}"
-                result = await patient_service.update_patient(
-                    patient_id,
-                    PatientUpdate(severity=severity_str),
-                )
-                patient_updated = result.get("success", False)
-            except Exception as exc:
-                return {
-                    "ok": True,
-                    "session_id": canonical_session_id,
-                    "confirmed_stage": confirmed_stage,
-                    "label_source": meta["label_source"],
-                    "training_copy": str(training_dir),
-                    "patient_updated": False,
-                    "patient_update_error": "Failed to update patient severity",
-                }
+            patient_updated, patient_update_error = await self._update_patient_severity(
+                patient_id, confirmed_stage
+            )
 
         return {
             "ok": True,
@@ -486,6 +504,7 @@ class DtwService:
             "label_source": meta["label_source"],
             "training_copy": str(training_dir),
             "patient_updated": patient_updated,
+            "patient_update_error": patient_update_error,
         }
 
     def _test_dir(self, test_name: str) -> Path:
@@ -584,3 +603,8 @@ class DtwService:
 
 
 dtw_service = DtwService()
+
+
+def get_dtw_service() -> DtwService:
+    """FastAPI dependency provider; lets routes/tests override the singleton."""
+    return dtw_service

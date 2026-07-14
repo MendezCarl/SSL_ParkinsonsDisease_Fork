@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 
+import pytest
 from fastapi.testclient import TestClient
 
 # Ensure backend imports work whether pytest is run from repo root or backend dir.
@@ -13,6 +14,21 @@ if str(BACKEND_DIR) not in sys.path:
 import routes.classifier as classifier_routes
 import services.patient_service as patient_service
 from main import app
+from services.lstm_cnn_inference import get_inference_service
+
+
+def _override_inference(predict_fn) -> None:
+    class _FakeInferenceService:
+        def predict(self, sequence, return_attention=False):
+            return predict_fn(sequence, return_attention=return_attention)
+
+    app.dependency_overrides[get_inference_service] = lambda: _FakeInferenceService()
+
+
+@pytest.fixture(autouse=True)
+def _clear_inference_override():
+    yield
+    app.dependency_overrides.pop(get_inference_service, None)
 
 
 def _valid_payload() -> dict:
@@ -49,7 +65,7 @@ def test_predict_and_update_success(monkeypatch):
     async def fake_update(patient_id, updated_data):
         return {"success": True, "patient_id": patient_id}
 
-    monkeypatch.setattr(classifier_routes.inference_service, "predict", fake_predict)
+    _override_inference(fake_predict)
     monkeypatch.setattr(patient_service, "update_patient", fake_update)
 
     client = TestClient(app)
@@ -69,7 +85,7 @@ def test_predict_and_update_unknown_patient_returns_404(monkeypatch):
     async def fake_update(patient_id, updated_data):
         return {"success": False, "error": "Patient not found"}
 
-    monkeypatch.setattr(classifier_routes.inference_service, "predict", fake_predict)
+    _override_inference(fake_predict)
     monkeypatch.setattr(patient_service, "update_patient", fake_update)
 
     client = TestClient(app)
@@ -83,7 +99,7 @@ def test_predict_and_update_bad_inference_returns_400(monkeypatch):
     def fake_predict(sequence, return_attention=False):
         raise ValueError("invalid sequence")
 
-    monkeypatch.setattr(classifier_routes.inference_service, "predict", fake_predict)
+    _override_inference(fake_predict)
 
     client = TestClient(app)
     response = client.post("/ml/updrs/predict/patients/patient123", json=_valid_payload())
@@ -99,7 +115,7 @@ def test_predict_only_mode_with_unknown_patient_returns_200(monkeypatch):
     async def fake_update(patient_id, updated_data):
         raise AssertionError("update should not be called when persist_update=false")
 
-    monkeypatch.setattr(classifier_routes.inference_service, "predict", fake_predict)
+    _override_inference(fake_predict)
     monkeypatch.setattr(patient_service, "update_patient", fake_update)
 
     client = TestClient(app)
@@ -128,7 +144,7 @@ def test_predict_checkpoint_missing_returns_500(monkeypatch):
     def fake_predict(sequence, return_attention=False):
         raise FileNotFoundError("checkpoint missing")
 
-    monkeypatch.setattr(classifier_routes.inference_service, "predict", fake_predict)
+    _override_inference(fake_predict)
 
     client = TestClient(app)
     response = client.post("/ml/updrs/predict/patients/patient123", json=_valid_payload())
@@ -141,7 +157,7 @@ def test_predict_from_session_persists_prediction_snapshot(monkeypatch):
     captured: dict = {}
 
     monkeypatch.setattr(classifier_routes, "_session_to_ml_sequence", lambda *args, **kwargs: [[0.1] * 24 for _ in range(30)])
-    monkeypatch.setattr(classifier_routes.inference_service, "predict", lambda **kwargs: _mock_prediction())
+    _override_inference(lambda sequence, return_attention=False: _mock_prediction())
     monkeypatch.setattr(
         classifier_routes,
         "persist_session_analysis",

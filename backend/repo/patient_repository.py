@@ -14,6 +14,11 @@ from repo.sql_models import Patient, LabResult, DoctorNote
 
 
 class PatientRepository:
+    # Mass-assignment guard: only these columns may be patched via update().
+    # patient_id/record_number/user_id are identity/ownership fields and must
+    # never be settable from an arbitrary update payload.
+    _UPDATABLE_FIELDS = {"name", "dob", "height", "weight", "severity"}
+
     def __init__(self, session: Session) -> None:
         self.session = session
 
@@ -31,7 +36,7 @@ class PatientRepository:
         if patient is None:
             return None
         for key, value in update_data.items():
-            if hasattr(patient, key):
+            if key in self._UPDATABLE_FIELDS:
                 setattr(patient, key, value)
         self.session.commit()
         return patient
