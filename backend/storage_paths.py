@@ -12,7 +12,6 @@ TEMPLATES_DIR = DATA_DIR / "templates"
 JSONS_DIR = DATA_DIR / "jsons"
 
 APP_DB_PATH = DATA_DIR / "app.db"
-TEST_DB_PATH = DATA_DIR / "test.db"
 TEST_HISTORY_PATH = DATA_DIR / "test_history.json"
 
 LEGACY_DATA_DIR = LEGACY_DIR / "data"

@@ -14,19 +14,19 @@ A web-based clinical tool for administering motor-function tests, scoring them w
 │  Pages                          │  + WS  │  /token      JWT auth            │
 │  ├─ Login / Register            │        │  /dtw        DTW session API     │
 │  ├─ Patient List / Details      │        │  /ml         LSTM-MIL inference  │
-│  ├─ Test Selection              │        │  /ws         WebSocket keypoints │
-│  ├─ Video Recording             │        │  /recordings video file serving  │
-│  ├─ Video Summary  ◄── AI card  │        │                                  │
+│  ├─ Test Selection              │        │  /ml/anomaly anomaly job queue   │
+│  ├─ Video Recording             │        │  /ws         WebSocket keypoints │
+│  ├─ Video Summary  ◄── AI card  │        │  /recordings video file serving  │
 │  └─ Timeline                    │        └──────────────┬───────────────────┘
 └─────────────────────────────────┘                       │
-                                                          │
-              ┌───────────────────────────────────────────┤
-              │                                           │
-   ┌──────────▼──────────┐              ┌─────────────────▼──────────────┐
-   │  MediaPipe Tasks    │              │       SQLite (SQLAlchemy)       │
-   │  hand_landmarker    │              │  Users · Patients · Visits      │
-   │  pose_landmarker    │              └────────────────────────────────┘
-   └──────────┬──────────┘
+                                                           │
+              ┌────────────────────────────────────────────┤
+              │                                            │
+   ┌──────────▼──────────┐              ┌──────────────────▼──────────────┐
+   │  MediaPipe Tasks    │              │       SQLite (SQLAlchemy)        │
+   │  hand_landmarker    │              │  Users · Patients · TestResults  │
+   │  pose_landmarker    │              │  · LabResults · AnomalyJobs      │
+   └──────────┬──────────┘              └─────────────────────────────────┘
               │ keypoints (T × 24)
    ┌──────────▼──────────┐
    │   DTW Engine        │     data/dtw_runs/<test>/<session_id>/
@@ -40,40 +40,60 @@ A web-based clinical tool for administering motor-function tests, scoring them w
    └─────────────────────┘
 ```
 
+The backend also exposes an `/ml/anomaly` job queue: a doctor submits a finished
+session, and a separate **worker** process — running on its own, more powerful
+machine (VideoMAE-style inference is too heavy for the API process) — polls for
+pending jobs, fetches the recording, and posts back per-timestamp anomaly
+findings. The worker is fully decoupled from this diagram's request/response
+flow; see [worker/README.md](worker/README.md) for setup and configuration.
+
 ---
 
 ## Repository Layout
 
 ```
 .
-├── backend/                  FastAPI application
-│   ├── main.py               App entry-point, routers, auth, recordings endpoints
+├── backend/                       FastAPI application
+│   ├── main.py                    App entry-point, routers, /token, /me, recordings
+│   ├── auth.py                    get_current_user / get_worker_auth, JWT + password hashing
+│   ├── dtw_models.py              Strategy pattern: hands/pose/finger feature extraction
 │   ├── requirements.txt
 │   ├── routes/
-│   │   ├── patient.py        /patients  CRUD
-│   │   ├── dtw_rest.py       /dtw       DTW session REST API + doctor label
-│   │   ├── classifier.py     /ml        LSTM-MIL inference endpoints
-│   │   ├── websockets.py     /ws        Real-time keypoint WebSocket
-│   │   └── contracts.py      Shared Pydantic models
+│   │   ├── patient.py             /patients     CRUD
+│   │   ├── dtw_rest.py            /dtw          DTW session REST API + doctor label
+│   │   ├── classifier.py          /ml           LSTM-MIL inference endpoints
+│   │   ├── anomaly.py             /ml/anomaly   Anomaly job queue (doctor + worker auth)
+│   │   ├── websockets.py          /ws           Real-time keypoint WebSocket
+│   │   └── contracts.py           Shared Pydantic models
 │   ├── services/
-│   │   └── lstm_cnn_inference.py   Inference wrapper (windowed, attention)
-│   ├── repo/                 SQLAlchemy models, DB session, Excel import
-│   ├── schema/               Pydantic schemas (patient, visit, classifier)
-│   ├── ml/                   MIL bag-level classifier module
-│   ├── data/                 Runtime-generated artifacts and local DB files
-│   ├── legacy/               Archived scripts, camera utilities, and flat files
-│   ├── healthy_data/         Healthy reference videos (per-test subdirs)
-│   ├── models/               MediaPipe .task files
+│   │   ├── lstm_cnn_inference.py  Inference wrapper (windowed, attention)
+│   │   ├── dtw_service.py         DTW session/artifact service
+│   │   ├── anomaly_service.py     Anomaly job lifecycle (create/poll/complete)
+│   │   ├── recording_service.py   Recording filename/upload handling
+│   │   └── test_history_service.py  Test-history persistence (SQLite)
+│   ├── repo/                      SQLAlchemy models, repositories, Excel import
+│   ├── schema/                    Pydantic schemas (patient, classifier, anomaly, ...)
+│   ├── ml/                        MIL bag-level classifier module
+│   ├── data/                      Runtime-generated artifacts and local DB files
+│   ├── legacy/                    Archived scripts, camera utilities, and flat files
+│   ├── healthy_data/              Healthy reference videos (per-test subdirs)
+│   ├── models/                    MediaPipe .task files
 │   │   ├── hand_landmarker.task
 │   │   └── pose_landmarker_lite.task
-│   ├── process_healthy_videos.py   Offline pipeline: videos → NPZ templates
-│   └── tests/                Pytest suite
-├── frontend/                 Vite + React + TypeScript
+│   ├── process_healthy_videos.py  Offline pipeline: videos → NPZ templates
+│   └── tests/                     Pytest suite
+├── worker/                        Anomaly-detection worker (separate machine/process)
+│   ├── main.py                    Poll → fetch video → process → post-result loop
+│   ├── client.py                  HTTP client for the backend's worker-facing endpoints
+│   ├── processor.py               AnomalyProcessor interface (stub until the real model lands)
+│   ├── config.py                  Env-based config (API_BASE_URL, ANOMALY_WORKER_TOKEN, ...)
+│   └── tests/
+├── frontend/                      Vite + React + TypeScript
 │   └── src/
-│       ├── pages/            Full-page route components
-│       ├── components/ui/    shadcn/ui component library
-│       ├── services/api.ts   HTTP client
-│       └── types/            Shared TypeScript types
+│       ├── pages/                 Full-page route components
+│       ├── components/ui/         shadcn/ui component library
+│       ├── services/client.ts     Shared HTTP client (auth header, error normalization)
+│       └── types/                 Shared TypeScript types
 └── docker-compose.yml
 ```
 
@@ -90,7 +110,8 @@ A web-based clinical tool for administering motor-function tests, scoring them w
 | DTW scoring | tslearn 0.6 |
 | ML model | LSTM + Attention MIL classifier (PyTorch) |
 | Database | SQLite via SQLAlchemy 2.0 |
-| Auth | JWT (python-jose), BCrypt (passlib) |
+| Auth | JWT (PyJWT, `jose` fallback), `pbkdf2_sha256` (passlib); separate shared-secret auth for the anomaly worker |
+| Anomaly worker | Standalone Python process (`requests`), polls the backend — no broker/queue infra |
 | Container | Docker / docker-compose |
 
 ---
@@ -118,6 +139,10 @@ cd backend
 python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
+Set `JWT_SECRET_KEY` in production (a random development secret is generated
+otherwise, and won't survive a restart). Set `ANOMALY_WORKER_TOKEN` if you're
+running the anomaly-detection worker (see below) — it must match on both sides.
+
 ### Frontend
 
 ```bash
@@ -127,6 +152,20 @@ npm run dev          # serves on http://localhost:5174
 ```
 
 Requests to `/api/*` are proxied to `http://localhost:8000` by Vite.
+
+### Anomaly-detection worker (optional, separate machine)
+
+```bash
+cd worker
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+export API_BASE_URL=http://<backend-host>:8000
+export ANOMALY_WORKER_TOKEN=<shared-secret>
+python main.py
+```
+
+See [worker/README.md](worker/README.md) for details. Ships with a stub
+processor today — no trained anomaly-detection model yet.
 
 ### Docker (both services)
 

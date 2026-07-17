@@ -242,7 +242,6 @@ Supported test types: `finger-tapping`, `fist-open-close`, `stand-and-sit`
 | `healthy_data/<test>/` | Healthy reference videos |
 | `models/` | MediaPipe `.task` files |
 | `data/app.db` | Active SQLite database used by `patient_manager.py` |
-| `data/test.db` | Legacy/staging SQLite database path still defined in `repo/db.py` |
 | `legacy/data/patients.json` | Archived flat-file patient store |
 | `legacy/data/patients.json.backup` | Archived backup of the flat-file patient store |
 
@@ -251,7 +250,7 @@ Supported test types: `finger-tapping`, `fist-open-close`, `stand-and-sit`
 ## Database
 
 SQLite via SQLAlchemy 2.0. Session factory: `patient_manager.SessionLocal`.  
-Models: `repo/sql_models.py` — `User`, `Patient`, `Visit`, `TestResult`.
+Models: `repo/sql_models.py` — `User`, `Patient`, `LabResult`, `DoctorNote`, `TestResult`, `AnomalyJob`.
 
 The default runtime database path is now `backend/data/app.db`. The repository-root `app.db` is left in place for audit and possible later removal.
 
@@ -262,9 +261,27 @@ Expected sheets: `patients`, `visits`, `test_results` (see column names in that 
 
 ## Authentication
 
-JWT bearer tokens issued at `POST /token` (OAuth2 password flow).  
-Token lifetime: 30 minutes. Secret key configured in `main.py` (`SECRET_KEY`).  
-Passwords hashed with BCrypt via `passlib`.
+Auth primitives live in `auth.py` (extracted from `main.py` so route modules can
+depend on it without a circular import). JWT bearer tokens issued at `POST /token`
+(OAuth2 password flow). Token lifetime: 30 minutes. Passwords hashed with
+`pbkdf2_sha256` via `passlib`.
+
+`JWT_SECRET_KEY` env var configures the signing secret. If unset, a random
+development-only secret is generated at startup (tokens won't survive a
+restart) — `ENVIRONMENT=production` with no `JWT_SECRET_KEY` set refuses to
+boot instead.
+
+Every REST route requires a valid bearer token (`Depends(get_current_user)`)
+except `/`, `/health`, `/token`, and `/docs`/`/openapi.json`. The camera
+websocket (`/ws/camera`, `/ws/{client_id}`) requires the token as a `?token=`
+query param instead, since browsers can't set a custom header on a WebSocket
+handshake; `GET /recordings/{filename}` accepts either the header or a
+`?token=` query param for the same reason (native `<video>`/`<a>` tags can't
+send custom headers either).
+
+The `/ml/anomaly` worker-facing endpoints (see below) use a **separate**
+shared-secret auth path (`ANOMALY_WORKER_TOKEN` env var, `get_worker_auth`),
+not the doctor JWT flow — the worker is a machine, not a logged-in clinician.
 
 ---
 
