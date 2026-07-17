@@ -40,12 +40,23 @@ A web-based clinical tool for administering motor-function tests, scoring them w
    └─────────────────────┘
 ```
 
-The backend also exposes an `/ml/anomaly` job queue: a doctor submits a finished
-session, and a separate **worker** process — running on its own, more powerful
-machine (VideoMAE-style inference is too heavy for the API process) — polls for
-pending jobs, fetches the recording, and posts back per-timestamp anomaly
-findings. The worker is fully decoupled from this diagram's request/response
-flow; see [worker/README.md](worker/README.md) for setup and configuration.
+The anomaly-detection worker is a separate process on its own, more powerful
+machine (VideoMAE-style inference is too heavy for the API process above). It
+always initiates contact — polling for jobs, fetching recordings, and posting
+results back — so the backend never needs to know its address or reachability:
+
+```
+┌────────────────────────────┐          ┌──────────────────────────────────────────────┐
+│  FastAPI Backend (:8000)   │          │ Anomaly Worker (own, more powerful machine)  │
+│                            │◄──poll──►│            worker/main.py                    │
+│  /ml/anomaly job queue:    │          │                                              │
+│  GET  /jobs?status=pending │          │ poll pending -> fetch video -> run           │
+│  GET  /jobs/{id}/video     │          │ AnomalyProcessor (stub today) -> POST result │
+│  POST /jobs/{id}/complete  │          │ back. Shared-secret auth, not doctor JWT.    │
+└────────────────────────────┘          └──────────────────────────────────────────────┘
+```
+
+See [worker/README.md](worker/README.md) for setup and configuration.
 
 ---
 
