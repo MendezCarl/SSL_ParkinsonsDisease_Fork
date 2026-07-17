@@ -56,7 +56,7 @@ threadpoolctl==3.6.0
 tslearn==0.6.4
 typing-inspection==0.4.2
 typing_extensions==4.15.0
-torch==2.12.1
+torch==2.13.0
 ultralytics
 uvicorn==0.38.0
 watchfiles==1.1.1
