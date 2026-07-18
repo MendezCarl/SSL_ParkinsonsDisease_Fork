@@ -64,9 +64,22 @@ export interface PersistedMlPrediction {
   generated_at?: string | null;
 }
 
+export interface PersistedAnomalyChunk {
+  start: string;
+  end: string;
+  confidence: number;
+}
+
+export interface PersistedAnomalyReport {
+  chunks: PersistedAnomalyChunk[];
+  model_version?: string | null;
+  generated_at?: string | null;
+}
+
 export interface TestAnalysisSnapshot {
   dtwMetrics?: PersistedDtwAnalysis | null;
   mlPrediction?: PersistedMlPrediction | null;
+  anomalyReport?: PersistedAnomalyReport | null;
 }
 
 export interface Test {

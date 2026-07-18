@@ -16,6 +16,7 @@ out/
 coverage/
 *.tgz
 *.tar.gz
+.playwright-mcp/
 
 # Python
 __pycache__/

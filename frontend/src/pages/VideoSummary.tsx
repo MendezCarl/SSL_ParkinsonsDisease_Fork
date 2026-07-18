@@ -1,5 +1,5 @@
 // frontend/src/pages/VideoSummary.tsx
-import React, { useState, useEffect, useMemo, ReactNode } from "react";
+import React, { useState, useEffect, useMemo, useRef, ReactNode } from "react";
 import { useParams, Link } from "react-router-dom";
 import {
   ArrowLeft,
@@ -41,6 +41,7 @@ import { Test } from "@/types/patient";
 import { getPatientTests } from "@/services/tests";
 import { useToast } from "@/hooks/use-toast";
 import {
+  AnomalyDetectionCard,
   DoctorLabelDialog,
   MlPredictionCard,
   PerformanceStatisticsCard,
@@ -64,6 +65,12 @@ import {
   type DtwSessionMeta,
   type MlPrediction,
 } from "@/services/dtw";
+import {
+  getAnomalyJob,
+  submitAnomalyJob,
+  type AnomalyJobStatus,
+  type AnomalyReport,
+} from "@/services/anomaly";
 
 /* ========================= Types ========================= */
 
@@ -487,6 +494,14 @@ const VideoSummary = () => {
   const [mlLoading, setMlLoading] = useState(false);
   const [mlErr, setMlErr] = useState<string | null>(null);
 
+  // Anomaly-detection job (offline worker)
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [anomalyJobId, setAnomalyJobId] = useState<string | null>(null);
+  const [anomalyStatus, setAnomalyStatus] = useState<AnomalyJobStatus | "idle">("idle");
+  const [anomalySubmitting, setAnomalySubmitting] = useState(false);
+  const [anomalyResult, setAnomalyResult] = useState<AnomalyReport | null>(null);
+  const [anomalyError, setAnomalyError] = useState<string | null>(null);
+
   // Doctor confirm/adjust dialog
   const [labelDialogOpen, setLabelDialogOpen] = useState(false);
   const [labelStage, setLabelStage] = useState<number>(1);
@@ -526,6 +541,22 @@ const VideoSummary = () => {
       confidence: prediction.confidence,
     };
   }, [currentTest?.analysis?.mlPrediction]);
+
+  const storedAnomalyReport = useMemo<AnomalyReport | null>(() => {
+    const report = currentTest?.analysis?.anomalyReport;
+    if (!report) return null;
+    return {
+      chunks: report.chunks,
+      model_version: report.model_version,
+      generated_at: report.generated_at,
+    };
+  }, [currentTest?.analysis?.anomalyReport]);
+
+  // A previously-completed job (persisted in test history) displays directly;
+  // a job submitted in this session takes priority once it starts.
+  const displayedAnomalyResult = anomalyResult ?? storedAnomalyReport;
+  const displayedAnomalyStatus: AnomalyJobStatus | "idle" =
+    anomalyJobId ? anomalyStatus : storedAnomalyReport ? "done" : "idle";
 
   const filteredHistory = useMemo(
     () =>
@@ -740,6 +771,60 @@ const VideoSummary = () => {
     return () => ctrl.abort();
   }, [testKey, sessionId, storedMlPrediction]);
 
+  // Reset any in-session anomaly job state when the selected test/session changes.
+  useEffect(() => {
+    setAnomalyJobId(null);
+    setAnomalyStatus("idle");
+    setAnomalySubmitting(false);
+    setAnomalyResult(null);
+    setAnomalyError(null);
+  }, [testKey, sessionId]);
+
+  // Poll the anomaly job until it reaches a terminal state.
+  useEffect(() => {
+    if (!anomalyJobId || anomalyStatus === "done" || anomalyStatus === "failed") return;
+
+    let cancelled = false;
+    const poll = async () => {
+      const response = await getAnomalyJob(anomalyJobId);
+      if (cancelled || !response.success || !response.data) return;
+      setAnomalyStatus(response.data.status);
+      setAnomalyResult(response.data.result);
+      setAnomalyError(response.data.error);
+    };
+
+    poll();
+    const interval = setInterval(poll, 4000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [anomalyJobId, anomalyStatus]);
+
+  const handleSubmitAnomalyJob = async () => {
+    if (!testKey || !sessionId || !id) return;
+    setAnomalySubmitting(true);
+    setAnomalyError(null);
+    const response = await submitAnomalyJob(testKey, sessionId, id);
+    setAnomalySubmitting(false);
+    if (response.success && response.data) {
+      setAnomalyJobId(response.data.job_id);
+      setAnomalyStatus(response.data.status);
+    } else {
+      setAnomalyStatus("failed");
+      setAnomalyError(response.error || "Failed to submit anomaly-detection job");
+    }
+  };
+
+  const handleJumpToAnomalyTimestamp = (seconds: number) => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.currentTime = seconds;
+    video.play().catch(() => {
+      // Autoplay can be blocked by the browser; the seek itself still applies.
+    });
+  };
+
   const onExport = async () => {
     if (!testKey || !sessionId) return;
     const response = await downloadDtwSession(testKey, sessionId);
@@ -776,6 +861,7 @@ const VideoSummary = () => {
             selectedVideo={selectedVideo}
             onSelectVideo={setSelectedVideo}
             duration={resolveDurationSeconds(currentTest)}
+            videoRef={videoRef}
           />
         </div>
 
@@ -813,6 +899,19 @@ const VideoSummary = () => {
               setLabelNotes("");
               setLabelDialogOpen(true);
             }}
+          />
+        </div>
+
+        {/* ====== Anomaly Detection (offline worker job) ====== */}
+        <div className="col-span-12">
+          <AnomalyDetectionCard
+            status={displayedAnomalyStatus}
+            submitting={anomalySubmitting}
+            result={displayedAnomalyResult}
+            error={anomalyError}
+            canSubmit={!!testKey && !!sessionId && !!id}
+            onSubmit={handleSubmitAnomalyJob}
+            onJumpTo={handleJumpToAnomalyTimestamp}
           />
         </div>
 

@@ -1,5 +1,19 @@
+import type { RefObject } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertTriangle, ArrowLeft, BarChart3, Brain, Calendar, CheckCircle2, Download, Pencil } from 'lucide-react';
+import {
+  AlertTriangle,
+  ArrowLeft,
+  BarChart3,
+  Brain,
+  Calendar,
+  CheckCircle2,
+  Clock,
+  Download,
+  Loader2,
+  Pencil,
+  ScanSearch,
+  XCircle,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -23,6 +37,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Textarea } from '@/components/ui/textarea';
 import type { Test } from '@/types/patient';
 import type { DtwSeriesMetrics, DtwSessionMeta, MlPrediction } from '@/services/dtw';
+import type { AnomalyJobStatus, AnomalyReport } from '@/services/anomaly';
 
 type HistoryFilter = 'all' | Test['type'];
 
@@ -80,6 +95,7 @@ export function RecordedVideoCard({
   selectedVideo,
   onSelectVideo,
   duration,
+  videoRef,
 }: {
   normalizedVideoName: string | null;
   videoSrc: string | null;
@@ -87,6 +103,7 @@ export function RecordedVideoCard({
   selectedVideo: string | null;
   onSelectVideo: (value: string) => void;
   duration: string;
+  videoRef?: RefObject<HTMLVideoElement>;
 }) {
   return (
     <Card>
@@ -101,7 +118,12 @@ export function RecordedVideoCard({
       <CardContent className="space-y-4">
         {normalizedVideoName && videoSrc ? (
           <>
-            <video key={normalizedVideoName} controls className="w-full rounded-lg aspect-video">
+            <video
+              key={normalizedVideoName}
+              ref={videoRef}
+              controls
+              className="w-full rounded-lg aspect-video"
+            >
               <source src={videoSrc} type={getVideoMimeType(normalizedVideoName)} />
               Your browser does not support the video tag.
             </video>
@@ -367,6 +389,109 @@ export function MlPredictionCard({
               </div>
             )}
           </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+const parseTimecodeToSeconds = (timecode: string): number => {
+  const parts = timecode.split(':').map((part) => Number(part));
+  if (parts.length === 0 || parts.some((part) => Number.isNaN(part))) return 0;
+  return parts.reduce((acc, part) => acc * 60 + part, 0);
+};
+
+export function AnomalyDetectionCard({
+  status,
+  submitting,
+  result,
+  error,
+  canSubmit,
+  onSubmit,
+  onJumpTo,
+}: {
+  status: AnomalyJobStatus | 'idle';
+  submitting: boolean;
+  result: AnomalyReport | null;
+  error: string | null;
+  canSubmit: boolean;
+  onSubmit: () => void;
+  onJumpTo: (seconds: number) => void;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <ScanSearch className="h-5 w-5 text-sky-600 dark:text-sky-400" />
+          Anomaly Detection
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {status === 'idle' && !result && (
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm text-muted-foreground">
+              Run offline movement-anomaly analysis on this recording. It runs on a separate
+              worker machine and can take a while — you can leave this page and check back later.
+            </p>
+            <Button size="sm" className="gap-2 shrink-0" disabled={!canSubmit} onClick={onSubmit}>
+              <ScanSearch className="h-4 w-4" />
+              Analyze
+            </Button>
+          </div>
+        )}
+
+        {(submitting || status === 'pending' || status === 'processing') && (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            {submitting ? 'Submitting…' : status === 'pending' ? 'Queued for analysis…' : 'Analyzing…'}
+          </div>
+        )}
+
+        {!submitting && status === 'failed' && (
+          <div className="flex items-center justify-between gap-3 rounded-md border border-red-300 bg-red-50 p-3 text-sm dark:border-red-800 dark:bg-red-950">
+            <div className="flex items-center gap-2 text-red-800 dark:text-red-300">
+              <XCircle className="h-4 w-4 shrink-0" />
+              {error ?? 'Anomaly detection failed.'}
+            </div>
+            <Button size="sm" variant="outline" onClick={onSubmit} disabled={!canSubmit}>
+              Retry
+            </Button>
+          </div>
+        )}
+
+        {!submitting && status === 'done' && result && (
+          result.chunks.length === 0 ? (
+            <div className="flex items-center gap-2 text-sm text-green-700 dark:text-green-400">
+              <CheckCircle2 className="h-4 w-4" />
+              No anomalous segments detected.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Flagged Segments
+              </p>
+              {result.chunks.map((chunk, idx) => (
+                <div
+                  key={`${chunk.start}-${chunk.end}-${idx}`}
+                  className="flex items-center justify-between gap-3 rounded-md border p-2 text-sm"
+                >
+                  <div className="flex items-center gap-2">
+                    <Clock className="h-4 w-4 text-muted-foreground" />
+                    <span className="tabular-nums">
+                      {chunk.start} – {chunk.end}
+                    </span>
+                    <Badge variant="secondary">{(chunk.confidence * 100).toFixed(0)}% confidence</Badge>
+                  </div>
+                  <Button size="sm" variant="ghost" onClick={() => onJumpTo(parseTimecodeToSeconds(chunk.start))}>
+                    Jump to
+                  </Button>
+                </div>
+              ))}
+              {result.model_version && (
+                <p className="text-xs text-muted-foreground">Model: {result.model_version}</p>
+              )}
+            </div>
+          )
         )}
       </CardContent>
     </Card>

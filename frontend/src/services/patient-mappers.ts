@@ -134,9 +134,22 @@ interface BackendStoredMlPrediction {
   generated_at?: string | null;
 }
 
+interface BackendAnomalyChunk {
+  start: string;
+  end: string;
+  confidence: number;
+}
+
+interface BackendAnomalyReport {
+  chunks?: BackendAnomalyChunk[] | null;
+  model_version?: string | null;
+  generated_at?: string | null;
+}
+
 interface BackendAnalysisSnapshot {
   dtw_metrics?: BackendStoredDtwAnalysis | null;
   ml_prediction?: BackendStoredMlPrediction | null;
+  anomaly_report?: BackendAnomalyReport | null;
 }
 
 export interface BackendTestEntry {
@@ -351,8 +364,21 @@ const parseStoredAnalysis = (analysis?: BackendAnalysisSnapshot | null): TestAna
       }
     : null;
 
-  if (!dtwMetrics && !mlPrediction) return null;
-  return { dtwMetrics, mlPrediction };
+  const rawAnomalyReport = analysis.anomaly_report;
+  const anomalyReport = rawAnomalyReport
+    ? {
+        chunks: (rawAnomalyReport.chunks ?? []).map((chunk) => ({
+          start: chunk.start,
+          end: chunk.end,
+          confidence: chunk.confidence,
+        })),
+        model_version: rawAnomalyReport.model_version ?? null,
+        generated_at: rawAnomalyReport.generated_at ?? null,
+      }
+    : null;
+
+  if (!dtwMetrics && !mlPrediction && !anomalyReport) return null;
+  return { dtwMetrics, mlPrediction, anomalyReport };
 };
 
 export const convertBackendTestToFrontend = (patientId: string, entry: BackendTestEntry, apiBaseUrl: string = '/api'): Test => {
