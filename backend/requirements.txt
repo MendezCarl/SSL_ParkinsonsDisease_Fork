@@ -33,7 +33,7 @@ opt_einsum==3.4.0
 packaging==25.0
 pandas==3.0.1
 passlib==1.7.4
-pillow==12.2.0
+pillow==12.3.0
 protobuf==6.33.5
 pyasn1==0.6.3
 pycparser==2.23
