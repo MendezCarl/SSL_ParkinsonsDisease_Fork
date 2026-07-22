@@ -35,7 +35,7 @@ pandas==3.0.1
 passlib==1.7.4
 pillow==12.2.0
 protobuf==6.33.5
-pyasn1==0.6.3
+pyasn1==0.6.4
 pycparser==2.23
 pydantic==2.12.3
 pydantic_core==2.41.4
