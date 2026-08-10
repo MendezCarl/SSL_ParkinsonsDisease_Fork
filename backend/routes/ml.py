@@ -18,6 +18,7 @@ from ml.registry import (
 from ml.schemas import (
     AnomalyEmbeddingRequest,
     AnomalyPredictionResponse,
+    AnomalyReviewWindow,
     AvailableModelsResponse,
     EmbeddingRequest,
     EmbeddingResponse,
@@ -25,6 +26,8 @@ from ml.schemas import (
     VideoAnomalyRequest,
 )
 from patient_manager import SessionLocal
+from services.recording_service import resolve_recording_path
+from storage_paths import RECORDINGS_DIR
 from services.ml_prediction_service import (
     WHOLE_VIDEO_ANOMALY,
     create_ml_prediction,
@@ -46,6 +49,7 @@ def _to_prediction_response(
     prediction_id: int | None = None,
     test_result_id: int | None = None,
     persisted: bool = False,
+    review_windows: list[AnomalyReviewWindow] | None = None,
 ) -> AnomalyPredictionResponse:
     return AnomalyPredictionResponse(
         filename=raw_result.get("filename"),
@@ -59,12 +63,54 @@ def _to_prediction_response(
         prediction_id=prediction_id,
         test_result_id=test_result_id,
         persisted=persisted,
+        review_windows=review_windows or [],
     )
 
 
 def _prediction_request_metadata(payload: AnomalyEmbeddingRequest | VideoAnomalyRequest) -> dict[str, Any]:
     data = payload.model_dump(exclude={"embedding"}, exclude_none=True)
     return data or {}
+
+
+def _resolve_video_embedding_path(video_path: str) -> Path:
+    path = Path(video_path.strip())
+    if len(path.parts) == 1:
+        return resolve_recording_path(path.name)
+    if len(path.parts) == 2 and path.parts[0] == "recordings":
+        return resolve_recording_path(path.name)
+
+    if path.is_absolute():
+        resolved = path.resolve(strict=False)
+        recordings_dir = RECORDINGS_DIR.resolve(strict=False)
+        try:
+            resolved.relative_to(recordings_dir)
+        except ValueError as exc:
+            raise ValueError("Video path must resolve under the recordings directory") from exc
+        return resolved
+
+    raise ValueError("Video path must be a recording filename or recordings/<filename>")
+
+
+def _score_review_windows(embedding: dict[str, Any], classifier: Any) -> list[AnomalyReviewWindow]:
+    windows = embedding.get("review_window_embeddings")
+    if not isinstance(windows, list):
+        return []
+
+    scored: list[AnomalyReviewWindow] = []
+    for window in windows:
+        if not isinstance(window, dict):
+            continue
+        raw_window_result = classifier.predict_from_record(window)
+        scored.append(
+            AnomalyReviewWindow(
+                start_sec=float(window["start_sec"]),
+                end_sec=float(window["end_sec"]),
+                predicted_label=raw_window_result["predicted_label"],
+                anomaly_probability=raw_window_result.get("anomaly_probability"),
+                anomaly_score=raw_window_result.get("anomaly_score"),
+            )
+        )
+    return scored
 
 
 def _persist_prediction(
@@ -167,16 +213,23 @@ async def embed_video(payload: EmbeddingRequest) -> EmbeddingResponse:
     try:
         video_model = selected_video_model_name(payload.video_model)
         embedder = get_video_embedder(video_model)
-        embedding = embedder.embed_video(Path(payload.video_path))
+        resolved_video_path = _resolve_video_embedding_path(payload.video_path)
+        embedding = embedder.embed_video(resolved_video_path)
     except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except KeyError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except NotImplementedError as exc:
         raise HTTPException(status_code=501, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     feature_keys = [key for key in embedding if key != "filename"]
     embedding_dim = sum(len(value) for key, value in embedding.items() if key != "filename" and hasattr(value, "__len__"))
     return EmbeddingResponse(
-        filename=str(embedding.get("filename") or Path(payload.video_path).name),
+        filename=str(embedding.get("filename") or resolved_video_path.name),
         video_model=video_model,
         embedding_dim=embedding_dim,
         feature_keys=feature_keys,
@@ -198,27 +251,37 @@ async def predict_anomaly_from_video(payload: VideoAnomalyRequest) -> AnomalyPre
         video_model = selected_video_model_name(payload.video_model)
         anomaly_model = selected_anomaly_model_name(payload.anomaly_model)
         embedder = get_video_embedder(video_model)
-        embedding = embedder.embed_video(Path(payload.video_path))
+        resolved_video_path = _resolve_video_embedding_path(payload.video_path)
+        embedding = embedder.embed_video(
+            resolved_video_path,
+            review_window_seconds=payload.review_window_seconds,
+        )
         classifier = get_anomaly_classifier(anomaly_model)
         raw_result = classifier.predict_from_record(embedding)
+        review_windows = _score_review_windows(embedding, classifier)
         response = _to_prediction_response(
             raw_result=raw_result,
             anomaly_model=anomaly_model,
             video_model=video_model,
+            review_windows=review_windows,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except NotImplementedError as exc:
         raise HTTPException(status_code=501, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     if payload.persist:
         prediction_id, test_result_id = _persist_prediction(
             payload=payload,
             response=response,
             anomaly_model=anomaly_model,
-            input_video_path=payload.video_path,
+            input_video_path=str(resolved_video_path),
         )
         response.prediction_id = prediction_id
         response.test_result_id = test_result_id

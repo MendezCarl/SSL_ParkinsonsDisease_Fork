@@ -38,6 +38,8 @@ venv/
 *.local
 .env
 .env.*
+!.env.example
+!backend/.env.example
 
 # Editor / IDE
 .vscode/*

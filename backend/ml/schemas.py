@@ -35,6 +35,14 @@ class AnomalyEmbeddingRequest(BaseModel):
     session_id: str | None = None
 
 
+class AnomalyReviewWindow(BaseModel):
+    start_sec: float
+    end_sec: float
+    predicted_label: Literal["normal", "anomalous"]
+    anomaly_probability: float | None = None
+    anomaly_score: float | None = None
+
+
 class AnomalyPredictionResponse(BaseModel):
     filename: str | None = None
     predicted_label: Literal["normal", "anomalous"]
@@ -47,6 +55,7 @@ class AnomalyPredictionResponse(BaseModel):
     prediction_id: int | None = None
     test_result_id: int | None = None
     persisted: bool = False
+    review_windows: list[AnomalyReviewWindow] = Field(default_factory=list)
 
 
 class VideoAnomalyRequest(BaseModel):
@@ -58,6 +67,7 @@ class VideoAnomalyRequest(BaseModel):
     test_result_id: int | None = None
     test_name: str | None = None
     session_id: str | None = None
+    review_window_seconds: float | None = Field(default=None, gt=0)
 
 
 class MLPredictionRecord(BaseModel):

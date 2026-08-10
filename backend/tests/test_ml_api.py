@@ -13,6 +13,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from main import app
+import ml.registry as ml_registry
 from repo.sql_models import Base, MLPrediction, Patient, TestResult, User
 from scripts.migrate_ml_predictions import migrate_ml_predictions
 import routes.ml as ml_routes
@@ -97,14 +98,48 @@ def _client_with_fake_classifier(monkeypatch) -> TestClient:
     return TestClient(app)
 
 
+class _FakeWindowEmbedder:
+    def embed_video(self, video_path: Path, *, review_window_seconds: float | None = None) -> dict:
+        assert review_window_seconds == 5
+        return {
+            "filename": video_path.name,
+            **_embedding(),
+            "review_window_embeddings": [
+                {"start_sec": 0.0, "end_sec": 5.0, **_embedding()},
+                {"start_sec": 5.0, "end_sec": 10.0, **_embedding()},
+            ],
+        }
+
+
+def _configure_fake_vjepa2_embedder(monkeypatch, tmp_path: Path) -> Path:
+    video_path = tmp_path / "finger-tapping.mp4"
+    video_path.write_bytes(b"fake video")
+    script_path = tmp_path / "emit_embedding.py"
+    script_path.write_text(
+        "import json, pathlib, sys\n"
+        "print(json.dumps({\n"
+        "    'filename': pathlib.Path(sys.argv[1]).name,\n"
+        "    'view_0_mean_pooled_embedding': [0.1, 0.2],\n"
+        "    'view_1_mean_pooled_embedding': [0.3, 0.4],\n"
+        "    'view_2_mean_pooled_embedding': [0.5, 0.6],\n"
+        "    'view_3_mean_pooled_embedding': [0.7, 0.8],\n"
+        "}))\n"
+    )
+    monkeypatch.setenv("VJEPA2_EMBEDDING_COMMAND", f"{sys.executable} {script_path} {{video_path}}")
+    monkeypatch.setattr(ml_routes, "resolve_recording_path", lambda _filename: video_path)
+    monkeypatch.setattr(ml_registry, "_video_embedder_instances", {})
+    return video_path
+
+
 def test_ml_models_returns_registered_models():
     response = TestClient(app).get("/ml/models")
 
     assert response.status_code == 200
     body = response.json()
     assert "dummy" in body["video_models"]
+    assert "vjepa2" in body["video_models"]
     assert "logistic_vjepa2" in body["anomaly_models"]
-    assert body["default_video_model"] == "dummy"
+    assert body["default_video_model"] in body["video_models"]
     assert body["default_anomaly_model"] == "logistic_vjepa2"
 
 
@@ -135,11 +170,92 @@ def test_missing_embedding_key_returns_400(monkeypatch):
 def test_predict_anomaly_from_video_returns_501_for_dummy_embedder():
     response = TestClient(app).post(
         "/ml/predict-anomaly-from-video",
-        json={"video_path": "/tmp/sample.mp4", "video_model": "dummy"},
+        json={"video_path": "sample.mp4", "video_model": "dummy"},
     )
 
     assert response.status_code == 501
     assert "dummy video embedder" in response.json()["detail"]
+
+
+def test_video_path_rejects_unknown_relative_paths():
+    response = TestClient(app).post(
+        "/ml/embed-video",
+        json={"video_path": "../sample.mp4", "video_model": "dummy"},
+    )
+
+    assert response.status_code == 400
+    assert "recording filename" in response.json()["detail"]
+
+
+def test_embed_video_uses_configured_vjepa2_command(monkeypatch, tmp_path):
+    _configure_fake_vjepa2_embedder(monkeypatch, tmp_path)
+
+    response = TestClient(app).post(
+        "/ml/embed-video",
+        json={"video_path": "finger-tapping.mp4", "video_model": "vjepa2"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["filename"] == "finger-tapping.mp4"
+    assert body["video_model"] == "vjepa2"
+    assert sorted(body["feature_keys"]) == [
+        "view_0_mean_pooled_embedding",
+        "view_1_mean_pooled_embedding",
+        "view_2_mean_pooled_embedding",
+        "view_3_mean_pooled_embedding",
+    ]
+
+
+def test_predict_anomaly_from_video_with_vjepa2_persists_prediction(monkeypatch, tmp_path):
+    session_local = _set_temp_ml_db(monkeypatch, tmp_path / "ml.db")
+    test_result_id = _seed_test_result(session_local, patient_id="patient-video", session_id="session-video")
+    video_path = _configure_fake_vjepa2_embedder(monkeypatch, tmp_path)
+    client = _client_with_fake_classifier(monkeypatch)
+
+    response = client.post(
+        "/ml/predict-anomaly-from-video",
+        json={
+            "video_path": "finger-tapping.mp4",
+            "video_model": "vjepa2",
+            "persist": True,
+            "patient_id": "patient-video",
+            "session_id": "session-video",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["persisted"] is True
+    assert body["test_result_id"] == test_result_id
+    assert body["video_model"] == "vjepa2"
+    with session_local() as session:
+        row = session.query(MLPrediction).one()
+        assert row.video_model == "vjepa2"
+        assert row.input_video_path == str(video_path)
+
+
+def test_predict_anomaly_from_video_returns_review_windows(monkeypatch, tmp_path):
+    video_path = tmp_path / "finger-tapping.mp4"
+    video_path.write_bytes(b"fake video")
+    monkeypatch.setattr(ml_routes, "resolve_recording_path", lambda _filename: video_path)
+    monkeypatch.setattr(ml_routes, "get_video_embedder", lambda _name: _FakeWindowEmbedder())
+    client = _client_with_fake_classifier(monkeypatch)
+
+    response = client.post(
+        "/ml/predict-anomaly-from-video",
+        json={
+            "video_path": "finger-tapping.mp4",
+            "video_model": "vjepa2",
+            "review_window_seconds": 5,
+        },
+    )
+
+    assert response.status_code == 200
+    windows = response.json()["review_windows"]
+    assert [window["start_sec"] for window in windows] == [0.0, 5.0]
+    assert all(window["predicted_label"] == "anomalous" for window in windows)
+    assert all(window["anomaly_probability"] == 0.87 for window in windows)
 
 
 def test_persist_false_does_not_insert_prediction(monkeypatch, tmp_path):

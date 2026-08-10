@@ -1,10 +1,24 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any
+
+from dotenv import load_dotenv
 
 from ml.anomaly_detection.anomaly_predictor import AnomalyPredictor
 from ml.video_embeddings.dummy_embedder import DummyVideoEmbedder
+from ml.video_embeddings.vjepa2_embedder import VJEPA2VideoEmbedder
+
+
+def _load_local_env() -> None:
+    backend_dir = Path(__file__).resolve().parents[1]
+    repo_root = backend_dir.parent
+    for env_path in (repo_root / ".env", backend_dir / ".env"):
+        load_dotenv(env_path, override=False)
+
+
+_load_local_env()
 
 
 DEFAULT_VIDEO_MODEL = os.getenv("DEFAULT_VIDEO_MODEL", "dummy")
@@ -12,6 +26,7 @@ DEFAULT_ANOMALY_MODEL = os.getenv("DEFAULT_ANOMALY_MODEL", "logistic_vjepa2")
 
 VIDEO_EMBEDDERS = {
     "dummy": DummyVideoEmbedder,
+    "vjepa2": VJEPA2VideoEmbedder,
 }
 
 ANOMALY_CLASSIFIERS = {

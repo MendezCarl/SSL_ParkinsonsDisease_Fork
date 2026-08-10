@@ -188,6 +188,7 @@ def predictions_for_patient(session: Session, patient_id: str, limit: int = 50) 
 
 def anomaly_summary(row: MLPrediction) -> dict[str, Any]:
     payload = serialize_ml_prediction(row)
+    response_json = payload.get("response_json") if isinstance(payload.get("response_json"), dict) else {}
     return {
         "prediction_id": payload["prediction_id"],
         "test_result_id": payload["test_result_id"],
@@ -200,4 +201,5 @@ def anomaly_summary(row: MLPrediction) -> dict[str, Any]:
         "model_version": payload["model_version"],
         "created_at": payload["created_at"],
         "persisted": True,
+        "review_windows": response_json.get("review_windows") or [],
     }
