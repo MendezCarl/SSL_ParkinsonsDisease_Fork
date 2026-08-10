@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from patient_manager import SessionLocal
@@ -115,8 +116,27 @@ def _matching_test_result(session: Session, patient_id: str, entry: Dict[str, An
     return query.order_by(TestResult.test_id.asc()).first()
 
 
-def _serialize_test_result(row: TestResult) -> Dict[str, Any]:
+def _serialize_test_result(row: TestResult, session: Session | None = None) -> Dict[str, Any]:
     payload = dict(row.extra or {})
+    try:
+        from services.ml_prediction_service import WHOLE_VIDEO_ANOMALY, anomaly_summary, latest_prediction_for_test_result
+
+        if session is None:
+            with SessionLocal() as lookup_session:
+                latest_anomaly = latest_prediction_for_test_result(lookup_session, row.test_id, WHOLE_VIDEO_ANOMALY)
+                if latest_anomaly is not None:
+                    analysis = dict(payload.get("analysis") or {})
+                    analysis["anomaly_prediction"] = anomaly_summary(latest_anomaly)
+                    payload["analysis"] = analysis
+        else:
+            latest_anomaly = latest_prediction_for_test_result(session, row.test_id, WHOLE_VIDEO_ANOMALY)
+            if latest_anomaly is not None:
+                analysis = dict(payload.get("analysis") or {})
+                analysis["anomaly_prediction"] = anomaly_summary(latest_anomaly)
+                payload["analysis"] = analysis
+    except SQLAlchemyError:
+        # Test history should remain available even if ML prediction lookup is not ready yet.
+        pass
     payload.update(
         {
             "test_id": row.session_id or str(row.test_id),
@@ -311,7 +331,7 @@ def get_patient_tests(patient_id: str) -> list[dict]:
             .order_by(TestResult.test_id.asc())
             .all()
         )
-        return [_serialize_test_result(row) for row in rows]
+        return [_serialize_test_result(row, session) for row in rows]
 
 
 def migrate_test_history_file(test_history_path: Path) -> Dict[str, int]:

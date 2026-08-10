@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from typing import List, Dict, Optional
 
-from sqlalchemy import Boolean, String, Integer, DateTime, Text, ForeignKey, create_engine, event, func, Index, Date
+from sqlalchemy import Boolean, String, Integer, DateTime, Text, ForeignKey, create_engine, event, func, Index, Date, Float
 
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 from sqlalchemy.types import JSON
@@ -96,6 +96,54 @@ class TestResult(Base):
     dtw: Mapped[Optional[Dict]] = mapped_column(JSON)
     extra: Mapped[Optional[Dict]] = mapped_column(JSON)
     patient: Mapped["Patient"] = relationship(back_populates="testresults")
+    ml_predictions: Mapped[List["MLPrediction"]] = relationship(
+        "MLPrediction",
+        back_populates="test_result",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+
+class MLPrediction(Base):
+    __tablename__ = "ml_predictions"
+    __table_args__ = (
+        Index("ix_ml_predictions_test_result", "test_result_id"),
+        Index("ix_ml_predictions_patient_created", "patient_id", "created_at"),
+        Index("ix_ml_predictions_session", "session_id"),
+        Index("ix_ml_predictions_type", "prediction_type"),
+    )
+
+    prediction_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    test_result_id: Mapped[int] = mapped_column(
+        ForeignKey("testresults.test_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    patient_id: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    session_id: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    test_name: Mapped[Optional[str]] = mapped_column(String(100))
+
+    prediction_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    video_model: Mapped[Optional[str]] = mapped_column(String(128))
+    classifier_model: Mapped[Optional[str]] = mapped_column(String(128))
+    model_version: Mapped[Optional[str]] = mapped_column(String(128))
+    model_artifact_path: Mapped[Optional[str]] = mapped_column(String(512))
+
+    predicted_label: Mapped[str] = mapped_column(String(64), nullable=False)
+    probability: Mapped[Optional[float]] = mapped_column(Float)
+    score: Mapped[Optional[float]] = mapped_column(Float)
+
+    input_video_path: Mapped[Optional[str]] = mapped_column(String(512))
+    input_filename: Mapped[Optional[str]] = mapped_column(String(512))
+    embedding_artifact_path: Mapped[Optional[str]] = mapped_column(String(512))
+
+    request_json: Mapped[Optional[Dict]] = mapped_column(JSON)
+    response_json: Mapped[Optional[Dict]] = mapped_column(JSON)
+    error_json: Mapped[Optional[Dict]] = mapped_column(JSON)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    test_result: Mapped["TestResult"] = relationship("TestResult", back_populates="ml_predictions")
 
 # SQLite FK enforcement
 def _set_sqlite_pragma(dbapi_conn, _):
@@ -125,7 +173,6 @@ if __name__ == "__main__":
         s.add_all([u, p])
         s.commit()
         # s.query(Patient).filter_by(user_id=u.id).all()
-
 
 
 

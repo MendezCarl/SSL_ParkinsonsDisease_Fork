@@ -133,9 +133,34 @@ interface BackendStoredMlPrediction {
   generated_at?: string | null;
 }
 
+interface BackendStoredAnomalyPrediction {
+  prediction_id?: number | string | null;
+  test_result_id?: number | string | null;
+  predicted_label?: string | null;
+  anomaly_probability?: number | string | null;
+  anomaly_score?: number | string | null;
+  probability?: number | string | null;
+  score?: number | string | null;
+  video_model?: string | null;
+  anomaly_model?: string | null;
+  classifier_model?: string | null;
+  model_version?: string | null;
+  created_at?: string | null;
+  generated_at?: string | null;
+  persisted?: boolean | null;
+  review_windows?: {
+    start_sec?: number | string | null;
+    end_sec?: number | string | null;
+    predicted_label?: string | null;
+    anomaly_probability?: number | string | null;
+    anomaly_score?: number | string | null;
+  }[] | null;
+}
+
 interface BackendAnalysisSnapshot {
   dtw_metrics?: BackendStoredDtwAnalysis | null;
   ml_prediction?: BackendStoredMlPrediction | null;
+  anomaly_prediction?: BackendStoredAnomalyPrediction | null;
 }
 
 export interface BackendTestEntry {
@@ -313,6 +338,11 @@ const parseNumber = (value: number | string | null | undefined): number | null =
   return Number.isFinite(parsed) ? parsed : null;
 };
 
+const parseInteger = (value: number | string | null | undefined): number | null => {
+  const parsed = parseNumber(value);
+  return parsed === null ? null : Math.trunc(parsed);
+};
+
 const parseStoredAnalysis = (analysis?: BackendAnalysisSnapshot | null): TestAnalysisSnapshot | null => {
   if (!analysis) return null;
 
@@ -348,8 +378,42 @@ const parseStoredAnalysis = (analysis?: BackendAnalysisSnapshot | null): TestAna
       }
     : null;
 
-  if (!dtwMetrics && !mlPrediction) return null;
-  return { dtwMetrics, mlPrediction };
+  const rawAnomalyPrediction = analysis.anomaly_prediction;
+  const reviewWindows = rawAnomalyPrediction?.review_windows
+    ?.map((window) => ({
+      start_sec: parseNumber(window.start_sec),
+      end_sec: parseNumber(window.end_sec),
+      predicted_label: window.predicted_label ?? '',
+      anomaly_probability: parseNumber(window.anomaly_probability),
+      anomaly_score: parseNumber(window.anomaly_score),
+    }))
+    .filter((window): window is {
+      start_sec: number;
+      end_sec: number;
+      predicted_label: string;
+      anomaly_probability: number | null;
+      anomaly_score: number | null;
+    } => window.start_sec !== null && window.end_sec !== null && Boolean(window.predicted_label)) ?? [];
+  const anomalyPrediction = rawAnomalyPrediction?.predicted_label
+    ? {
+        prediction_id: parseInteger(rawAnomalyPrediction.prediction_id),
+        test_result_id: parseInteger(rawAnomalyPrediction.test_result_id),
+        predicted_label: rawAnomalyPrediction.predicted_label,
+        anomaly_probability: parseNumber(rawAnomalyPrediction.anomaly_probability ?? rawAnomalyPrediction.probability),
+        anomaly_score: parseNumber(rawAnomalyPrediction.anomaly_score ?? rawAnomalyPrediction.score),
+        video_model: rawAnomalyPrediction.video_model ?? null,
+        anomaly_model: rawAnomalyPrediction.anomaly_model ?? rawAnomalyPrediction.classifier_model ?? null,
+        classifier_model: rawAnomalyPrediction.classifier_model ?? rawAnomalyPrediction.anomaly_model ?? null,
+        model_version: rawAnomalyPrediction.model_version ?? null,
+        created_at: rawAnomalyPrediction.created_at ?? null,
+        generated_at: rawAnomalyPrediction.generated_at ?? null,
+        persisted: rawAnomalyPrediction.persisted ?? null,
+        review_windows: reviewWindows,
+      }
+    : null;
+
+  if (!dtwMetrics && !mlPrediction && !anomalyPrediction) return null;
+  return { dtwMetrics, mlPrediction, anomalyPrediction };
 };
 
 export const convertBackendTestToFrontend = (patientId: string, entry: BackendTestEntry, apiBaseUrl: string = '/api'): Test => {

@@ -7,7 +7,7 @@ The model is binary:
 - `normal`
 - `anomalous`
 
-It does not predict Parkinson's stage, and it does not process raw video directly. The application must provide the same precomputed embedding record format used during training.
+It does not predict Parkinson's stage, and it does not process raw video directly. Raw/saved video inference is handled by the registered video embedder, currently the configurable `vjepa2` adapter in `backend/ml/video_embeddings/`.
 
 ## Files
 
@@ -31,6 +31,8 @@ Each embedding record must contain:
 ```
 
 Each embedding can be a torch tensor, list, or numpy array. The four views are concatenated into one `5632`-feature vector.
+
+For saved-video inference, configure `DEFAULT_VIDEO_MODEL=vjepa2` and `VJEPA2_EMBEDDING_COMMAND` as described in `backend/ml/video_embeddings/README.md`.
 
 ## Usage
 
