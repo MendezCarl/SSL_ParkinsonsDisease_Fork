@@ -13,6 +13,7 @@ from routes.dtw_rest import router as dtw_router
 from routes.patient import router as patient_router
 from routes.websockets import router as ws_router
 from routes.classifier import router as classifier_router
+from routes.ml import router as ml_router
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from repo.sql_models import User
 from patient_manager import SessionLocal
@@ -68,6 +69,7 @@ app.include_router(dtw_router)
 app.include_router(patient_router)
 app.include_router(ws_router)
 app.include_router(classifier_router)
+app.include_router(ml_router, prefix="/ml", tags=["ML"])
 
 # ============ CORS ============
 app.add_middleware(
@@ -167,9 +169,25 @@ class PersistedMlPredictionSnapshot(BaseModel):
     generated_at: str | None = None
 
 
+class PersistedAnomalyPredictionSnapshot(BaseModel):
+    prediction_id: int | None = None
+    test_result_id: int | None = None
+    predicted_label: str
+    anomaly_probability: float | None = None
+    anomaly_score: float | None = None
+    video_model: str | None = None
+    anomaly_model: str | None = None
+    classifier_model: str | None = None
+    model_version: str | None = None
+    created_at: str | None = None
+    generated_at: str | None = None
+    persisted: bool | None = None
+
+
 class TestAnalysisSnapshot(BaseModel):
     dtw_metrics: PersistedDtwAnalysisSnapshot | None = None
     ml_prediction: PersistedMlPredictionSnapshot | None = None
+    anomaly_prediction: PersistedAnomalyPredictionSnapshot | None = None
 
 
 class PatientTestHistoryEntry(BaseModel):
