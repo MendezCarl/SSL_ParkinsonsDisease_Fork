@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { AlertTriangle, ArrowLeft, BarChart3, Brain, Calendar, CheckCircle2, Download, Pencil } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, BarChart3, Brain, Calendar, CheckCircle2, Download, Pencil, ShieldAlert } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -21,7 +21,7 @@ import {
 } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
-import type { Test } from '@/types/patient';
+import type { PersistedAnomalyPrediction, Test } from '@/types/patient';
 import type { DtwSeriesMetrics, DtwSessionMeta, MlPrediction } from '@/services/dtw';
 
 type HistoryFilter = 'all' | Test['type'];
@@ -366,6 +366,76 @@ export function MlPredictionCard({
                 )}
               </div>
             )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+const formatModelValue = (value?: string | null): string => value || '—';
+
+const formatPredictionTimestamp = (value?: string | null): string => {
+  if (!value) return '—';
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
+};
+
+export function WholeVideoAnomalyCard({
+  anomalyPrediction,
+}: {
+  anomalyPrediction?: PersistedAnomalyPrediction | null;
+}) {
+  const probability = anomalyPrediction?.anomaly_probability;
+  const score = anomalyPrediction?.anomaly_score;
+  const timestamp = anomalyPrediction?.created_at ?? anomalyPrediction?.generated_at ?? null;
+  const anomalyModel = anomalyPrediction?.anomaly_model ?? anomalyPrediction?.classifier_model ?? null;
+  const isPersisted = anomalyPrediction?.persisted !== false;
+
+  return (
+    <Card className="border-2 border-sky-200 dark:border-sky-800">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <ShieldAlert className="h-5 w-5 text-sky-600 dark:text-sky-400" />
+          Whole-Video Anomaly
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {!anomalyPrediction ? (
+          <p className="text-sm text-muted-foreground">No persisted whole-video anomaly prediction is available for this test.</p>
+        ) : (
+          <div className="space-y-4">
+            <div className="flex flex-col items-center gap-2 rounded-lg bg-muted py-6">
+              <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground">Prediction</p>
+              <p className="text-4xl font-bold capitalize text-sky-700 dark:text-sky-400">{anomalyPrediction.predicted_label}</p>
+              <Badge variant={isPersisted ? 'secondary' : 'outline'}>
+                {isPersisted ? 'Persisted' : 'Not Persisted'}
+              </Badge>
+            </div>
+            <Table>
+              <TableBody>
+                <TableRow>
+                  <TableCell>Probability</TableCell>
+                  <TableCell>{probability != null ? `${(probability * 100).toFixed(1)}%` : '—'}</TableCell>
+                </TableRow>
+                <TableRow>
+                  <TableCell>Score</TableCell>
+                  <TableCell>{score != null ? score.toFixed(4) : '—'}</TableCell>
+                </TableRow>
+                <TableRow>
+                  <TableCell>Video Model</TableCell>
+                  <TableCell>{formatModelValue(anomalyPrediction.video_model)}</TableCell>
+                </TableRow>
+                <TableRow>
+                  <TableCell>Anomaly Model</TableCell>
+                  <TableCell>{formatModelValue(anomalyModel)}</TableCell>
+                </TableRow>
+                <TableRow>
+                  <TableCell>Timestamp</TableCell>
+                  <TableCell>{formatPredictionTimestamp(timestamp)}</TableCell>
+                </TableRow>
+              </TableBody>
+            </Table>
           </div>
         )}
       </CardContent>

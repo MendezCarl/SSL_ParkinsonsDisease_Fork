@@ -47,6 +47,7 @@ import {
   RecordedVideoCard,
   TestHistoryCard,
   VideoSummaryHeader,
+  WholeVideoAnomalyCard,
 } from "@/components/video-summary/VideoSummarySections";
 import {
   type AxisAggResponse,
@@ -832,6 +833,10 @@ const VideoSummary = () => {
               setLabelDialogOpen(true);
             }}
           />
+        </div>
+
+        <div className="col-span-12">
+          <WholeVideoAnomalyCard anomalyPrediction={currentTest?.analysis?.anomalyPrediction} />
         </div>
 
         <DoctorLabelDialog

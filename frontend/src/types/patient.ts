@@ -64,9 +64,25 @@ export interface PersistedMlPrediction {
   generated_at?: string | null;
 }
 
+export interface PersistedAnomalyPrediction {
+  prediction_id?: number | null;
+  test_result_id?: number | null;
+  predicted_label: string;
+  anomaly_probability?: number | null;
+  anomaly_score?: number | null;
+  video_model?: string | null;
+  anomaly_model?: string | null;
+  classifier_model?: string | null;
+  model_version?: string | null;
+  created_at?: string | null;
+  generated_at?: string | null;
+  persisted?: boolean | null;
+}
+
 export interface TestAnalysisSnapshot {
   dtwMetrics?: PersistedDtwAnalysis | null;
   mlPrediction?: PersistedMlPrediction | null;
+  anomalyPrediction?: PersistedAnomalyPrediction | null;
 }
 
 export interface Test {
