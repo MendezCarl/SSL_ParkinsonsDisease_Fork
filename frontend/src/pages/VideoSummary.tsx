@@ -816,6 +816,8 @@ const VideoSummary = () => {
             sessions={sessions}
             sessionId={sessionId}
           />
+
+          <WholeVideoAnomalyCard anomalyPrediction={currentTest?.analysis?.anomalyPrediction} />
         </div>
 
         {/* ====== ML UPDRS Stage Prediction ====== */}
@@ -833,10 +835,6 @@ const VideoSummary = () => {
               setLabelDialogOpen(true);
             }}
           />
-        </div>
-
-        <div className="col-span-12">
-          <WholeVideoAnomalyCard anomalyPrediction={currentTest?.analysis?.anomalyPrediction} />
         </div>
 
         <DoctorLabelDialog
