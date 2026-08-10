@@ -1,3 +1,4 @@
+import type { RefObject } from 'react';
 import { Link } from 'react-router-dom';
 import { AlertTriangle, ArrowLeft, BarChart3, Brain, Calendar, CheckCircle2, Download, Pencil, ShieldAlert } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -20,9 +21,11 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import type { PersistedAnomalyPrediction, Test } from '@/types/patient';
 import type { DtwSeriesMetrics, DtwSessionMeta, MlPrediction } from '@/services/dtw';
+import type { MlPredictionRecord } from '@/services/ml';
 
 type HistoryFilter = 'all' | Test['type'];
 
@@ -79,6 +82,7 @@ export function RecordedVideoCard({
   videoList,
   selectedVideo,
   onSelectVideo,
+  videoRef,
   duration,
 }: {
   normalizedVideoName: string | null;
@@ -86,6 +90,7 @@ export function RecordedVideoCard({
   videoList: string[];
   selectedVideo: string | null;
   onSelectVideo: (value: string) => void;
+  videoRef?: RefObject<HTMLVideoElement>;
   duration: string;
 }) {
   return (
@@ -101,7 +106,7 @@ export function RecordedVideoCard({
       <CardContent className="space-y-4">
         {normalizedVideoName && videoSrc ? (
           <>
-            <video key={normalizedVideoName} controls className="w-full rounded-lg aspect-video">
+            <video ref={videoRef} key={normalizedVideoName} controls className="w-full rounded-lg aspect-video">
               <source src={videoSrc} type={getVideoMimeType(normalizedVideoName)} />
               Your browser does not support the video tag.
             </video>
@@ -381,16 +386,38 @@ const formatPredictionTimestamp = (value?: string | null): string => {
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
 };
 
+const formatPredictionNumber = (value?: number | null, scale: number = 1): string => {
+  if (value == null) return '—';
+  return `${(value * scale).toFixed(scale === 100 ? 1 : 4)}${scale === 100 ? '%' : ''}`;
+};
+
+const formatWindowLabel = (startSec: number, endSec: number): string => (
+  `${startSec.toFixed(1)}s-${endSec.toFixed(1)}s`
+);
+
 export function WholeVideoAnomalyCard({
   anomalyPrediction,
+  anomalyLoading,
+  anomalyErr,
+  predictionHistory,
+  predictionsLoading,
+  predictionsErr,
+  onSelectReviewWindow,
 }: {
   anomalyPrediction?: PersistedAnomalyPrediction | null;
+  anomalyLoading: boolean;
+  anomalyErr: string | null;
+  predictionHistory: MlPredictionRecord[];
+  predictionsLoading: boolean;
+  predictionsErr: string | null;
+  onSelectReviewWindow: (startSec: number) => void;
 }) {
   const probability = anomalyPrediction?.anomaly_probability;
   const score = anomalyPrediction?.anomaly_score;
   const timestamp = anomalyPrediction?.created_at ?? anomalyPrediction?.generated_at ?? null;
   const anomalyModel = anomalyPrediction?.anomaly_model ?? anomalyPrediction?.classifier_model ?? null;
   const isPersisted = anomalyPrediction?.persisted !== false;
+  const reviewWindows = anomalyPrediction?.review_windows ?? [];
 
   return (
     <Card className="border-2 border-sky-200 dark:border-sky-800">
@@ -401,43 +428,126 @@ export function WholeVideoAnomalyCard({
         </CardTitle>
       </CardHeader>
       <CardContent>
-        {!anomalyPrediction ? (
-          <p className="text-sm text-muted-foreground">No persisted whole-video anomaly prediction is available for this test.</p>
-        ) : (
-          <div className="space-y-4">
-            <div className="flex flex-col items-center gap-2 rounded-lg bg-muted py-6">
-              <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground">Prediction</p>
-              <p className="text-4xl font-bold capitalize text-sky-700 dark:text-sky-400">{anomalyPrediction.predicted_label}</p>
-              <Badge variant={isPersisted ? 'secondary' : 'outline'}>
-                {isPersisted ? 'Persisted' : 'Not Persisted'}
-              </Badge>
-            </div>
-            <Table>
-              <TableBody>
-                <TableRow>
-                  <TableCell>Probability</TableCell>
-                  <TableCell>{probability != null ? `${(probability * 100).toFixed(1)}%` : '—'}</TableCell>
-                </TableRow>
-                <TableRow>
-                  <TableCell>Score</TableCell>
-                  <TableCell>{score != null ? score.toFixed(4) : '—'}</TableCell>
-                </TableRow>
-                <TableRow>
-                  <TableCell>Video Model</TableCell>
-                  <TableCell>{formatModelValue(anomalyPrediction.video_model)}</TableCell>
-                </TableRow>
-                <TableRow>
-                  <TableCell>Anomaly Model</TableCell>
-                  <TableCell>{formatModelValue(anomalyModel)}</TableCell>
-                </TableRow>
-                <TableRow>
-                  <TableCell>Timestamp</TableCell>
-                  <TableCell>{formatPredictionTimestamp(timestamp)}</TableCell>
-                </TableRow>
-              </TableBody>
-            </Table>
-          </div>
-        )}
+        <Tabs defaultValue="prediction" className="space-y-4">
+          <TabsList className="grid w-full grid-cols-3">
+            <TabsTrigger value="prediction">Prediction</TabsTrigger>
+            <TabsTrigger value="windows">Review Windows</TabsTrigger>
+            <TabsTrigger value="history">History</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="prediction" className="space-y-4">
+            {anomalyLoading ? (
+              <p className="text-sm text-muted-foreground">Running whole-video anomaly analysis…</p>
+            ) : anomalyErr ? (
+              <p className="text-sm text-red-600">{anomalyErr}</p>
+            ) : !anomalyPrediction ? (
+              <p className="text-sm text-muted-foreground">Whole-video anomaly analysis will start when a recording is available.</p>
+            ) : (
+              <div className="space-y-4">
+                <div className="flex flex-col items-center gap-2 rounded-lg bg-muted py-6">
+                  <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground">Prediction</p>
+                  <p className="text-4xl font-bold capitalize text-sky-700 dark:text-sky-400">{anomalyPrediction.predicted_label}</p>
+                  <Badge variant={isPersisted ? 'secondary' : 'outline'}>
+                    {isPersisted ? 'Persisted' : 'Not Persisted'}
+                  </Badge>
+                </div>
+                <Table>
+                  <TableBody>
+                    <TableRow>
+                      <TableCell>Probability</TableCell>
+                      <TableCell>{probability != null ? `${(probability * 100).toFixed(1)}%` : '—'}</TableCell>
+                    </TableRow>
+                    <TableRow>
+                      <TableCell>Score</TableCell>
+                      <TableCell>{score != null ? score.toFixed(4) : '—'}</TableCell>
+                    </TableRow>
+                    <TableRow>
+                      <TableCell>Video Model</TableCell>
+                      <TableCell>{formatModelValue(anomalyPrediction.video_model)}</TableCell>
+                    </TableRow>
+                    <TableRow>
+                      <TableCell>Anomaly Model</TableCell>
+                      <TableCell>{formatModelValue(anomalyModel)}</TableCell>
+                    </TableRow>
+                    <TableRow>
+                      <TableCell>Timestamp</TableCell>
+                      <TableCell>{formatPredictionTimestamp(timestamp)}</TableCell>
+                    </TableRow>
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </TabsContent>
+
+          <TabsContent value="windows" className="space-y-3">
+            <p className="text-xs text-muted-foreground">
+              Experimental 5-second windows scored with the whole-video anomaly classifier. Use these as review cues, not timestamp labels.
+            </p>
+            {anomalyLoading ? (
+              <p className="text-sm text-muted-foreground">Generating review windows…</p>
+            ) : reviewWindows.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No review windows available for this prediction.</p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {reviewWindows.map((window) => (
+                  <Button
+                    key={`${window.start_sec}-${window.end_sec}`}
+                    type="button"
+                    variant={window.predicted_label === 'anomalous' ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => onSelectReviewWindow(window.start_sec)}
+                  >
+                    {formatWindowLabel(window.start_sec, window.end_sec)}
+                    {' '}
+                    {formatPredictionNumber(window.anomaly_probability, 100)}
+                  </Button>
+                ))}
+              </div>
+            )}
+          </TabsContent>
+
+          <TabsContent value="history" className="space-y-3">
+            {predictionsLoading ? (
+              <p className="text-sm text-muted-foreground">Loading prediction history…</p>
+            ) : predictionsErr ? (
+              <p className="text-sm text-red-600">{predictionsErr}</p>
+            ) : predictionHistory.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No previous whole-video predictions for this test.</p>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Result</TableHead>
+                    <TableHead>Probability</TableHead>
+                    <TableHead>Model</TableHead>
+                    <TableHead>Created</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {predictionHistory.map((prediction, index) => (
+                    <TableRow key={prediction.prediction_id} className={index === 0 ? 'bg-muted/50' : undefined}>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <span className="capitalize">{prediction.predicted_label}</span>
+                          {index === 0 && <Badge variant="secondary">Latest</Badge>}
+                        </div>
+                      </TableCell>
+                      <TableCell>{formatPredictionNumber(prediction.probability, 100)}</TableCell>
+                      <TableCell>
+                        <div className="text-xs">
+                          <div>{formatModelValue(prediction.video_model)}</div>
+                          <div className="text-muted-foreground">{formatModelValue(prediction.classifier_model)}</div>
+                          {prediction.model_version && <div className="text-muted-foreground">{prediction.model_version}</div>}
+                        </div>
+                      </TableCell>
+                      <TableCell>{formatPredictionTimestamp(prediction.created_at)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </TabsContent>
+        </Tabs>
       </CardContent>
     </Card>
   );

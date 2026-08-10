@@ -148,6 +148,13 @@ interface BackendStoredAnomalyPrediction {
   created_at?: string | null;
   generated_at?: string | null;
   persisted?: boolean | null;
+  review_windows?: {
+    start_sec?: number | string | null;
+    end_sec?: number | string | null;
+    predicted_label?: string | null;
+    anomaly_probability?: number | string | null;
+    anomaly_score?: number | string | null;
+  }[] | null;
 }
 
 interface BackendAnalysisSnapshot {
@@ -372,6 +379,21 @@ const parseStoredAnalysis = (analysis?: BackendAnalysisSnapshot | null): TestAna
     : null;
 
   const rawAnomalyPrediction = analysis.anomaly_prediction;
+  const reviewWindows = rawAnomalyPrediction?.review_windows
+    ?.map((window) => ({
+      start_sec: parseNumber(window.start_sec),
+      end_sec: parseNumber(window.end_sec),
+      predicted_label: window.predicted_label ?? '',
+      anomaly_probability: parseNumber(window.anomaly_probability),
+      anomaly_score: parseNumber(window.anomaly_score),
+    }))
+    .filter((window): window is {
+      start_sec: number;
+      end_sec: number;
+      predicted_label: string;
+      anomaly_probability: number | null;
+      anomaly_score: number | null;
+    } => window.start_sec !== null && window.end_sec !== null && Boolean(window.predicted_label)) ?? [];
   const anomalyPrediction = rawAnomalyPrediction?.predicted_label
     ? {
         prediction_id: parseInteger(rawAnomalyPrediction.prediction_id),
@@ -386,6 +408,7 @@ const parseStoredAnalysis = (analysis?: BackendAnalysisSnapshot | null): TestAna
         created_at: rawAnomalyPrediction.created_at ?? null,
         generated_at: rawAnomalyPrediction.generated_at ?? null,
         persisted: rawAnomalyPrediction.persisted ?? null,
+        review_windows: reviewWindows,
       }
     : null;
 

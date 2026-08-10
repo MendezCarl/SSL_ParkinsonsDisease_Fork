@@ -29,6 +29,15 @@ export interface VideoAnomalyRequest {
   test_result_id?: number | null;
   test_name?: string | null;
   session_id?: string | null;
+  review_window_seconds?: number | null;
+}
+
+export interface AnomalyReviewWindow {
+  start_sec: number;
+  end_sec: number;
+  predicted_label: 'normal' | 'anomalous';
+  anomaly_probability?: number | null;
+  anomaly_score?: number | null;
 }
 
 export interface AnomalyPredictionResponse {
@@ -43,6 +52,7 @@ export interface AnomalyPredictionResponse {
   prediction_id?: number | null;
   test_result_id?: number | null;
   persisted: boolean;
+  review_windows?: AnomalyReviewWindow[];
 }
 
 export interface MlPredictionRecord {
@@ -86,32 +96,37 @@ export async function predictAnomalyFromEmbedding(
 }
 
 export async function predictAnomalyFromVideo(
-  payload: VideoAnomalyRequest
+  payload: VideoAnomalyRequest,
+  signal?: AbortSignal
 ): Promise<ServiceResponse<AnomalyPredictionResponse>> {
   return apiClient.request<AnomalyPredictionResponse>('/ml/predict-anomaly-from-video', {
     method: 'POST',
     body: JSON.stringify(payload),
+    signal,
   });
 }
 
 export async function getMlPredictionsForTest(
-  testResultId: number
+  testResultId: number,
+  signal?: AbortSignal
 ): Promise<ServiceResponse<MlPredictionListResponse>> {
-  return apiClient.request<MlPredictionListResponse>(`/ml/predictions/test/${encodeURIComponent(testResultId)}`);
+  return apiClient.request<MlPredictionListResponse>(`/ml/predictions/test/${encodeURIComponent(testResultId)}`, { signal });
 }
 
 export async function getMlPredictionsForSession(
-  sessionId: string
+  sessionId: string,
+  signal?: AbortSignal
 ): Promise<ServiceResponse<MlPredictionListResponse>> {
-  return apiClient.request<MlPredictionListResponse>(`/ml/predictions/session/${encodeURIComponent(sessionId)}`);
+  return apiClient.request<MlPredictionListResponse>(`/ml/predictions/session/${encodeURIComponent(sessionId)}`, { signal });
 }
 
 export async function getMlPredictionsForPatient(
   patientId: string,
-  limit?: number
+  limit?: number,
+  signal?: AbortSignal
 ): Promise<ServiceResponse<MlPredictionListResponse>> {
   const query = limit == null ? '' : `?limit=${encodeURIComponent(limit)}`;
-  return apiClient.request<MlPredictionListResponse>(`/ml/predictions/patient/${encodeURIComponent(patientId)}${query}`);
+  return apiClient.request<MlPredictionListResponse>(`/ml/predictions/patient/${encodeURIComponent(patientId)}${query}`, { signal });
 }
 
 export async function predictAndUpdateSeverity(

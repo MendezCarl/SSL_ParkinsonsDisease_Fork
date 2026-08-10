@@ -1,5 +1,5 @@
 // frontend/src/pages/VideoSummary.tsx
-import React, { useState, useEffect, useMemo, ReactNode } from "react";
+import React, { useState, useEffect, useMemo, useRef, ReactNode } from "react";
 import { useParams, Link } from "react-router-dom";
 import {
   ArrowLeft,
@@ -37,9 +37,16 @@ import {
   Label as RechartsLabel,
   Customized,
 } from "recharts";
-import { Test } from "@/types/patient";
+import { PersistedAnomalyPrediction, Test } from "@/types/patient";
 import { getPatientTests } from "@/services/tests";
 import { useToast } from "@/hooks/use-toast";
+import {
+  getMlPredictionsForSession,
+  getMlPredictionsForTest,
+  predictAnomalyFromVideo,
+  type AnomalyPredictionResponse,
+  type MlPredictionRecord,
+} from "@/services/ml";
 import {
   DoctorLabelDialog,
   MlPredictionCard,
@@ -84,6 +91,35 @@ const normalizeTestKey = (t?: string | null): CanonicalTest | null => {
   if (s === "finger-taping") return "finger-tapping"; // typo guard
   return isCanonical(s) ? (s as CanonicalTest) : null;
 };
+
+const normalizeRecordingName = (value?: string | null): string | null => {
+  const name = value?.trim();
+  if (!name) return null;
+  return name.replace(/^\/?recordings\//, "");
+};
+
+const parseTestResultId = (value?: string | null): number | null => {
+  if (!value) return null;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+};
+
+const toPersistedAnomalyPrediction = (
+  prediction: AnomalyPredictionResponse
+): PersistedAnomalyPrediction => ({
+  prediction_id: prediction.prediction_id ?? null,
+  test_result_id: prediction.test_result_id ?? null,
+  predicted_label: prediction.predicted_label,
+  anomaly_probability: prediction.anomaly_probability ?? null,
+  anomaly_score: prediction.anomaly_score ?? null,
+  video_model: prediction.video_model ?? null,
+  anomaly_model: prediction.anomaly_model ?? null,
+  classifier_model: prediction.anomaly_model ?? null,
+  model_version: prediction.model_version ?? null,
+  generated_at: new Date().toISOString(),
+  persisted: prediction.persisted,
+  review_windows: prediction.review_windows ?? [],
+});
 
 const formatHistorySummary = (test: Test): string => {
   if (test.similarity !== null && test.similarity !== undefined) {
@@ -490,6 +526,17 @@ const VideoSummary = () => {
   const [mlLoading, setMlLoading] = useState(false);
   const [mlErr, setMlErr] = useState<string | null>(null);
 
+  // Whole-video anomaly prediction
+  const [anomalyPrediction, setAnomalyPrediction] = useState<PersistedAnomalyPrediction | null>(null);
+  const [anomalyLoading, setAnomalyLoading] = useState(false);
+  const [anomalyErr, setAnomalyErr] = useState<string | null>(null);
+  const [predictionHistory, setPredictionHistory] = useState<MlPredictionRecord[]>([]);
+  const [predictionsLoading, setPredictionsLoading] = useState(false);
+  const [predictionsErr, setPredictionsErr] = useState<string | null>(null);
+  const [predictionHistoryRefreshKey, setPredictionHistoryRefreshKey] = useState(0);
+  const anomalyRequestKeyRef = useRef<string | null>(null);
+  const recordedVideoRef = useRef<HTMLVideoElement>(null);
+
   // Doctor confirm/adjust dialog
   const [labelDialogOpen, setLabelDialogOpen] = useState(false);
   const [labelStage, setLabelStage] = useState<number>(1);
@@ -529,6 +576,8 @@ const VideoSummary = () => {
       confidence: prediction.confidence,
     };
   }, [currentTest]);
+
+  const storedAnomalyPrediction = currentTest?.analysis?.anomalyPrediction ?? null;
 
   const filteredHistory = useMemo(
     () =>
@@ -576,10 +625,8 @@ const VideoSummary = () => {
   }, [id]);
 
   // Normalize selectedVideo in case backend returns "recordings/xyz.mp4"
-  const normalizedVideoName =
-    selectedVideo?.startsWith("recordings/")
-      ? selectedVideo.split("/").slice(-1)[0]
-      : selectedVideo || null;
+  const preferredRecordingName = normalizeRecordingName(currentTest?.recordingFile);
+  const normalizedVideoName = normalizeRecordingName(selectedVideo) ?? preferredRecordingName;
 
   const videoSrc =
     normalizedVideoName != null
@@ -662,11 +709,18 @@ const VideoSummary = () => {
     const ctrl = new AbortController();
     (async () => {
       const response = await listPatientVideos(id, testKey, ctrl.signal);
+      const preferredVideo = normalizeRecordingName(currentTest?.recordingFile);
       if (response.success) {
         const videos = response.data ?? [];
-        if (videos.length > 0) {
-          setVideoList(videos);
-          setSelectedVideo(videos[0]);
+        const videosWithPreferred = preferredVideo
+          ? [
+              preferredVideo,
+              ...videos.filter((video) => normalizeRecordingName(video) !== preferredVideo),
+            ]
+          : videos;
+        if (videosWithPreferred.length > 0) {
+          setVideoList(videosWithPreferred);
+          setSelectedVideo(videosWithPreferred[0]);
         } else if (currentTest?.recordingFile) {
           // Fallback: use current test's recording file directly
           setVideoList([currentTest.recordingFile]);
@@ -759,6 +813,82 @@ const VideoSummary = () => {
     return () => ctrl.abort();
   }, [testKey, sessionId, storedMlPrediction]);
 
+  // Start whole-video anomaly prediction as soon as this summary has a recording.
+  useEffect(() => {
+    setAnomalyPrediction(storedAnomalyPrediction);
+    setAnomalyErr(null);
+
+    if (!routeResolved || !id || !currentTest || !normalizedVideoName) {
+      setAnomalyLoading(false);
+      return;
+    }
+    if (storedAnomalyPrediction) {
+      setAnomalyLoading(false);
+      return;
+    }
+
+    const requestKey = [currentTest.id, currentTest.dtwSessionId, normalizedVideoName].join(":");
+    if (anomalyRequestKeyRef.current === requestKey) return;
+    anomalyRequestKeyRef.current = requestKey;
+
+    const ctrl = new AbortController();
+    queueMicrotask(() => void (async () => {
+      setAnomalyLoading(true);
+      const response = await predictAnomalyFromVideo(
+        {
+          video_path: normalizedVideoName,
+          persist: true,
+          patient_id: id,
+          test_result_id: parseTestResultId(currentTest.id),
+          test_name: currentTest.type,
+          session_id: currentTest.dtwSessionId ?? null,
+          review_window_seconds: 5,
+        },
+        ctrl.signal
+      );
+      if (ctrl.signal.aborted) return;
+      if (response.success && response.data) {
+        setAnomalyPrediction(toPersistedAnomalyPrediction(response.data));
+        setPredictionHistoryRefreshKey((value) => value + 1);
+      } else {
+        setAnomalyErr(response.error || "Whole-video anomaly analysis unavailable");
+      }
+      setAnomalyLoading(false);
+    })());
+
+    return () => ctrl.abort();
+  }, [currentTest, id, normalizedVideoName, routeResolved, storedAnomalyPrediction]);
+
+  useEffect(() => {
+    const testResultId = parseTestResultId(currentTest?.id);
+    const currentSessionId = currentTest?.dtwSessionId ?? null;
+    if (!routeResolved || (!testResultId && !currentSessionId)) {
+      setPredictionHistory([]);
+      setPredictionsLoading(false);
+      setPredictionsErr(null);
+      return;
+    }
+
+    const ctrl = new AbortController();
+    queueMicrotask(() => void (async () => {
+      setPredictionsLoading(true);
+      setPredictionsErr(null);
+      const response = testResultId
+        ? await getMlPredictionsForTest(testResultId, ctrl.signal)
+        : await getMlPredictionsForSession(currentSessionId as string, ctrl.signal);
+      if (ctrl.signal.aborted) return;
+      if (response.success && response.data) {
+        setPredictionHistory(response.data.predictions);
+      } else {
+        setPredictionHistory([]);
+        setPredictionsErr(response.error || "Failed to load prediction history");
+      }
+      setPredictionsLoading(false);
+    })());
+
+    return () => ctrl.abort();
+  }, [currentTest?.dtwSessionId, currentTest?.id, predictionHistoryRefreshKey, routeResolved]);
+
   const onExport = async () => {
     if (!testKey || !sessionId) return;
     const response = await downloadDtwSession(testKey, sessionId);
@@ -780,6 +910,13 @@ const VideoSummary = () => {
     }
   };
 
+  const seekToReviewWindow = (startSec: number) => {
+    const video = recordedVideoRef.current;
+    if (!video) return;
+    video.currentTime = startSec;
+    void video.play().catch(() => undefined);
+  };
+
   return (
     <div className="min-h-screen bg-background">
       <VideoSummaryHeader patientId={id} canExport={!!testKey && !!sessionId} onExport={onExport} />
@@ -794,6 +931,7 @@ const VideoSummary = () => {
             videoList={videoList}
             selectedVideo={selectedVideo}
             onSelectVideo={setSelectedVideo}
+            videoRef={recordedVideoRef}
             duration={resolveDurationSeconds(currentTest)}
           />
         </div>
@@ -817,7 +955,15 @@ const VideoSummary = () => {
             sessionId={sessionId}
           />
 
-          <WholeVideoAnomalyCard anomalyPrediction={currentTest?.analysis?.anomalyPrediction} />
+          <WholeVideoAnomalyCard
+            anomalyPrediction={anomalyPrediction}
+            anomalyLoading={anomalyLoading}
+            anomalyErr={anomalyErr}
+            predictionHistory={predictionHistory}
+            predictionsLoading={predictionsLoading}
+            predictionsErr={predictionsErr}
+            onSelectReviewWindow={seekToReviewWindow}
+          />
         </div>
 
         {/* ====== ML UPDRS Stage Prediction ====== */}

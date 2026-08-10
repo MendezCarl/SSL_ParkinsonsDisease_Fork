@@ -77,6 +77,13 @@ export interface PersistedAnomalyPrediction {
   created_at?: string | null;
   generated_at?: string | null;
   persisted?: boolean | null;
+  review_windows?: {
+    start_sec: number;
+    end_sec: number;
+    predicted_label: string;
+    anomaly_probability?: number | null;
+    anomaly_score?: number | null;
+  }[];
 }
 
 export interface TestAnalysisSnapshot {
