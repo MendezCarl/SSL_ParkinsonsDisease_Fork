@@ -178,7 +178,7 @@ const PatientList = () => {
   }, [toast]);
 
   useEffect(() => {
-    void fetchPatients();
+    queueMicrotask(() => void fetchPatients());
   }, [fetchPatients]);
 
   const handleCsvUploadClick = () => {

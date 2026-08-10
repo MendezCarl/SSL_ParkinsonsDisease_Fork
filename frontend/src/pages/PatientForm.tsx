@@ -68,7 +68,7 @@ const PatientForm = () => {
   // Load patient data if editing
   useEffect(() => {
     if (isEditing && id) {
-      void loadPatientData();
+      queueMicrotask(() => void loadPatientData());
     }
   }, [isEditing, id, loadPatientData]);
 

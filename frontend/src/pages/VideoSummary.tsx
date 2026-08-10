@@ -256,12 +256,14 @@ function DtwAggregatePanels({
 
   useEffect(() => {
     if (!testKey || !sessionId) {
-      setData(null);
-      setErr(null);
+      queueMicrotask(() => {
+        setData(null);
+        setErr(null);
+      });
       return;
     }
     let aborted = false;
-    (async () => {
+    queueMicrotask(() => void (async () => {
       setLoading(true);
       setErr(null);
       const response = await getDtwAxisAggregate(
@@ -278,7 +280,7 @@ function DtwAggregatePanels({
         }
         setLoading(false);
       }
-    })();
+    })());
     return () => {
       aborted = true;
     };
@@ -514,7 +516,7 @@ const VideoSummary = () => {
       ok: true,
       ...currentTest.analysis.dtwMetrics,
     };
-  }, [currentTest?.analysis?.dtwMetrics]);
+  }, [currentTest]);
 
   const storedMlPrediction = useMemo<MlPrediction | null>(() => {
     const prediction = currentTest?.analysis?.mlPrediction;
@@ -525,7 +527,7 @@ const VideoSummary = () => {
       severity: prediction.severity,
       confidence: prediction.confidence,
     };
-  }, [currentTest?.analysis?.mlPrediction]);
+  }, [currentTest]);
 
   const filteredHistory = useMemo(
     () =>
@@ -542,14 +544,16 @@ const VideoSummary = () => {
 
   useEffect(() => {
     if (!id) {
-      setTestHistory([]);
-      setHistoryLoading(false);
+      queueMicrotask(() => {
+        setTestHistory([]);
+        setHistoryLoading(false);
+      });
       return;
     }
 
     let cancelled = false;
-    setHistoryLoading(true);
-    (async () => {
+    queueMicrotask(() => void (async () => {
+      setHistoryLoading(true);
       try {
         const response = await getPatientTests(id);
         if (cancelled) return;
@@ -563,7 +567,7 @@ const VideoSummary = () => {
           setHistoryLoading(false);
         }
       }
-    })();
+    })());
 
     return () => {
       cancelled = true;
@@ -583,40 +587,50 @@ const VideoSummary = () => {
 
   // Resolve route: testId may be a test type OR a session id
   useEffect(() => {
-    setErrMsg(null);
-    setRouteResolved(false);
+    queueMicrotask(() => {
+      setErrMsg(null);
+      setRouteResolved(false);
+    });
 
     const currentTestKey = normalizeTestKey(currentTest?.type);
     if (currentTest && String(currentTest.id) === testId && currentTestKey) {
-      setTestKey(currentTestKey);
-      setSessionId(currentTest.dtwSessionId ?? null);
-      setRouteResolved(true);
+      queueMicrotask(() => {
+        setTestKey(currentTestKey);
+        setSessionId(currentTest.dtwSessionId ?? null);
+        setRouteResolved(true);
+      });
       return;
     }
 
     if (currentTest?.dtwSessionId && testId === currentTest.dtwSessionId && currentTestKey) {
-      setTestKey(currentTestKey);
-      setSessionId(currentTest.dtwSessionId);
-      setRouteResolved(true);
+      queueMicrotask(() => {
+        setTestKey(currentTestKey);
+        setSessionId(currentTest.dtwSessionId);
+        setRouteResolved(true);
+      });
       return;
     }
 
     const norm = normalizeTestKey(testId);
     if (norm) {
-      setTestKey(norm);
-      setSessionId(currentTest?.dtwSessionId ?? null);
-      setRouteResolved(true);
+      queueMicrotask(() => {
+        setTestKey(norm);
+        setSessionId(currentTest?.dtwSessionId ?? null);
+        setRouteResolved(true);
+      });
       return;
     }
     if (!testId) {
-      setTestKey(currentTestKey);
-      setSessionId(currentTest?.dtwSessionId ?? null);
-      setRouteResolved(true);
+      queueMicrotask(() => {
+        setTestKey(currentTestKey);
+        setSessionId(currentTest?.dtwSessionId ?? null);
+        setRouteResolved(true);
+      });
       return;
     }
 
     const ctrl = new AbortController();
-    (async () => {
+    queueMicrotask(() => void (async () => {
       const response = await lookupDtwSession(testId, id, ctrl.signal);
       if (response.success && response.data) {
         const key = normalizeTestKey(response.data.testName);
@@ -636,10 +650,10 @@ const VideoSummary = () => {
         setSessionId(null);
       }
       setRouteResolved(true);
-    })();
+    })());
 
     return () => ctrl.abort();
-  }, [currentTest, currentTest?.dtwSessionId, currentTest?.type, testId]);
+  }, [currentTest, id, testId]);
 
   // Videos list
   useEffect(() => {
@@ -695,12 +709,14 @@ const VideoSummary = () => {
   // Fetch KPI metrics (distance, avg step cost, similarity) from /series
   useEffect(() => {
     if (!testKey || !sessionId) {
-      setMetrics(storedDtwMetrics);
-      setMetricsErr(null);
+      queueMicrotask(() => {
+        setMetrics(storedDtwMetrics);
+        setMetricsErr(null);
+      });
       return;
     }
     const ctrl = new AbortController();
-    (async () => {
+    queueMicrotask(() => void (async () => {
       setMetricsLoading(true);
       setMetricsErr(null);
       setMetrics(storedDtwMetrics);
@@ -712,19 +728,21 @@ const VideoSummary = () => {
         setMetricsErr(storedDtwMetrics ? null : response.error || "Failed to load DTW metrics");
       }
       setMetricsLoading(false);
-    })();
+    })());
     return () => ctrl.abort();
   }, [testKey, sessionId, storedDtwMetrics]);
 
   // Fetch ML UPDRS stage prediction from saved DTW session
   useEffect(() => {
     if (!testKey || !sessionId) {
-      setMlPrediction(storedMlPrediction);
-      setMlErr(null);
+      queueMicrotask(() => {
+        setMlPrediction(storedMlPrediction);
+        setMlErr(null);
+      });
       return;
     }
     const ctrl = new AbortController();
-    (async () => {
+    queueMicrotask(() => void (async () => {
       setMlLoading(true);
       setMlErr(null);
       setMlPrediction(storedMlPrediction);
@@ -736,7 +754,7 @@ const VideoSummary = () => {
         setMlErr(storedMlPrediction ? null : response.error || "ML prediction unavailable");
       }
       setMlLoading(false);
-    })();
+    })());
     return () => ctrl.abort();
   }, [testKey, sessionId, storedMlPrediction]);
 

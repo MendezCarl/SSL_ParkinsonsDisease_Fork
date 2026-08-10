@@ -157,6 +157,13 @@ const VideoRecording = () => {
   const wsFinalizeRef = useRef<{ resolve: () => void; timerId: number } | null>(null);
   const sendFps = 15; // throttle frame sends
 
+  const stopFrameLoop = useCallback(() => {
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+  }, []);
+
   const rememberSessionForCurrentTest = useCallback((nextSessionId: string | null | undefined) => {
     if (!currentTestId || !nextSessionId) {
       return;
@@ -234,7 +241,7 @@ const VideoRecording = () => {
         resolve();
       }
     });
-  }, [forceCloseWs, resolveWsFinalize]);
+  }, [forceCloseWs]);
 
   const summaryRouteTarget = currentTestId
     ? sessionIdsByTest[currentTestId] || lastCompletedSessionId || testId
@@ -314,7 +321,7 @@ const VideoRecording = () => {
         rafRef.current = null;
       }
     };
-  }, [ensureCameraStream, releaseCameraStream, selectedTests.length]);
+  }, [ensureCameraStream, forceCloseWs, releaseCameraStream, selectedTests.length, stopFrameLoop]);
 
   // ---- Recording timer ----
   useEffect(() => {
@@ -456,13 +463,6 @@ const VideoRecording = () => {
     };
     rafRef.current = requestAnimationFrame(tick);
   };
-  const stopFrameLoop = () => {
-    if (rafRef.current) {
-      cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
-    }
-  };
-
   // ---- Draw keypoints on overlay (crisp with DPR) ----
   const drawKeypoints = (msg: WSKeypointsMessage) => {
     const overlay = overlayRef.current;

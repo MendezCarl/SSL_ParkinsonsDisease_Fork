@@ -23,8 +23,8 @@ A web-based clinical tool for administering motor-function tests, scoring them w
               ┌───────────────────────────────────────────┤
               │                                           │
    ┌──────────▼──────────┐              ┌─────────────────▼──────────────┐
-   │  MediaPipe Tasks    │              │       SQLite (SQLAlchemy)       │
-   │  hand_landmarker    │              │  Users · Patients · Visits      │
+   │  MediaPipe Tasks    │              │       SQLite (SQLAlchemy)      │
+   │  hand_landmarker    │              │  Users · Patients · Visits     │
    │  pose_landmarker    │              └────────────────────────────────┘
    └──────────┬──────────┘
               │ keypoints (T × 24)

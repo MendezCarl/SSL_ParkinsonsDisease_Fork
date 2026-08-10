@@ -1,11 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { getHealthStatus } from '@/services/auth';
 
 export const useApiStatus = () => {
   const [isConnected, setIsConnected] = useState<boolean | null>(null);
   const [isChecking, setIsChecking] = useState(true);
 
-  const checkConnection = async () => {
+  const checkConnection = useCallback(async () => {
     setIsChecking(true);
     try {
       const healthResponse = await getHealthStatus();
@@ -15,11 +15,11 @@ export const useApiStatus = () => {
     } finally {
       setIsChecking(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    checkConnection();
-  }, []);
+    queueMicrotask(() => void checkConnection());
+  }, [checkConnection]);
 
   return {
     isConnected,
