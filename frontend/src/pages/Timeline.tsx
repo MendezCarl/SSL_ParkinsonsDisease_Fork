@@ -101,7 +101,7 @@ export default function Timeline() {
 
   useEffect(() => {
     if (!patientId) return;
-    void loadData();
+    queueMicrotask(() => void loadData());
   }, [patientId, loadData]);
 
   // Combine all events into a timeline
